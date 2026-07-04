@@ -6,7 +6,8 @@ clean interface for sending messages from any module in the codebase.
 
 Sprint 1 commands: /start, /help, /ping, /version, /stats
 Sprint 2 commands: /watch, /diagnostics  (+ live /stats data)
-Sprint 3+ will add alert dispatch and watchlist interaction commands.
+Sprint 3 commands: /watchlist, /token, /leaderboard, /heartbeat,
+                   /marketmode, /editfilters
 """
 
 from __future__ import annotations
@@ -20,6 +21,10 @@ from app.telegram import handlers
 from app.utils.errors import TelegramNotConfiguredError
 
 if TYPE_CHECKING:
+    from app.analysis.market_mode import MarketModeDetector
+    from app.analysis.ranking import RankingEngine
+    from app.database.manager import DatabaseManager
+    from app.heartbeat.heartbeat import Heartbeat
     from app.providers.manager import ProviderManager
     from app.scanner.token_scanner import TokenScanner
     from app.scanner.watchlist import WatchlistManager
@@ -64,10 +69,14 @@ class TelegramBot:
         self._target_chat = target_chat
         self._app: Optional[Application] = None
 
-        # Injected after construction by the lifespan — used by /stats, /watch etc.
+        # Injected by set_runtime_context() before start()
         self._provider_manager: Optional["ProviderManager"] = None
         self._watchlist: Optional["WatchlistManager"] = None
         self._scanner: Optional["TokenScanner"] = None
+        self._db: Optional["DatabaseManager"] = None
+        self._ranking_engine: Optional["RankingEngine"] = None
+        self._market_mode_detector: Optional["MarketModeDetector"] = None
+        self._heartbeat: Optional["Heartbeat"] = None
 
     # ── Dependency injection ──────────────────────────────────────────────
 
@@ -77,15 +86,23 @@ class TelegramBot:
         provider_manager: Optional["ProviderManager"] = None,
         watchlist: Optional["WatchlistManager"] = None,
         scanner: Optional["TokenScanner"] = None,
+        db: Optional["DatabaseManager"] = None,
+        ranking_engine: Optional["RankingEngine"] = None,
+        market_mode_detector: Optional["MarketModeDetector"] = None,
+        heartbeat: Optional["Heartbeat"] = None,
     ) -> None:
         """
-        Inject runtime singletons after the bot is constructed.
+        Inject runtime singletons after construction.
 
-        Must be called before :meth:`start` if the handlers need live data.
+        Must be called before :meth:`start` for handlers to have live data.
         """
         self._provider_manager = provider_manager
         self._watchlist = watchlist
         self._scanner = scanner
+        self._db = db
+        self._ranking_engine = ranking_engine
+        self._market_mode_detector = market_mode_detector
+        self._heartbeat = heartbeat
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -112,13 +129,14 @@ class TelegramBot:
             provider_manager=self._provider_manager,
             watchlist=self._watchlist,
             scanner=self._scanner,
+            db=self._db,
+            ranking_engine=self._ranking_engine,
+            market_mode_detector=self._market_mode_detector,
+            heartbeat=self._heartbeat,
         )
 
-        # Initialise and start background tasks (job queue, etc.)
         await self._app.initialize()
         await self._app.start()
-
-        # Start polling in a background task so it does not block FastAPI.
         await self._app.updater.start_polling(
             drop_pending_updates=True,
             allowed_updates=["message"],
@@ -127,11 +145,7 @@ class TelegramBot:
         logger.info("Telegram bot started (polling).")
 
     async def stop(self) -> None:
-        """
-        Stop polling and shut down the Application gracefully.
-
-        Safe to call when the bot is not running.
-        """
+        """Stop polling and shut down the Application gracefully."""
         if self._app is None:
             return
 
@@ -165,11 +179,6 @@ class TelegramBot:
             Telegram parse mode: "HTML" or "MarkdownV2".
         disable_web_page_preview:
             Suppress link previews (recommended for alert messages).
-
-        Raises
-        ------
-        RuntimeError
-            When the bot has not been started.
         """
         if self._app is None:
             raise RuntimeError(
@@ -196,15 +205,7 @@ class TelegramBot:
         return self._app is not None
 
     def info(self) -> dict[str, object]:
-        """
-        Return a health summary for the /health API endpoint.
-
-        Returns
-        -------
-        dict
-            Keys: ``running`` (bool), ``target_chat`` (str),
-            ``authorized_users`` (int).
-        """
+        """Return a health summary for the /health API endpoint."""
         return {
             "running": self.is_running,
             "target_chat": self._target_chat,

@@ -191,3 +191,9 @@ class WatchEntry:
     market_cap_usd: Optional[float] = None
     liquidity_usd: Optional[float] = None
     volume_24h_usd: Optional[float] = None
+
+    # Sprint 3: scoring columns (populated after intelligence layer runs)
+    score: Optional[float] = None
+    confidence: Optional[float] = None
+    risk_level: str = "UNKNOWN"
+    alert_sent_at: Optional[str] = None

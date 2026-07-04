@@ -437,6 +437,33 @@ class WatchlistManager:
         )
         return row["cnt"] if row else 0
 
+    async def get_tracking_tokens(self) -> list[WatchEntry]:
+        """
+        Return TRACKING tokens that are due for a milestone check.
+
+        Tokens enter TRACKING after an alert is dispatched.  They are
+        excluded from :meth:`get_due_tokens` but need periodic milestone
+        scans.  Uses the same ``next_scan_at`` scheduling mechanism;
+        TRACKING tokens default to MEDIUM scan cadence (120 s).
+
+        Returns
+        -------
+        list[WatchEntry]
+            Tracking tokens whose next_scan_at is in the past (or NULL).
+        """
+        now = utcnow_iso()
+        rows = await self._db.fetchall(
+            """
+            SELECT *
+            FROM   watchlist
+            WHERE  state = ?
+              AND  (next_scan_at IS NULL OR next_scan_at <= ?)
+            ORDER BY last_scan_at ASC NULLS FIRST
+            """,
+            (TokenState.TRACKING.value, now),
+        )
+        return [_row_to_entry(row) for row in rows]
+
     async def get_recent_history(
         self, mint: str, limit: int = 10
     ) -> list[dict[str, object]]:
@@ -501,6 +528,11 @@ def _row_to_entry(row: object) -> WatchEntry:
         market_cap_usd=_float(r.get("market_cap_usd")),
         liquidity_usd=_float(r.get("liquidity_usd")),
         volume_24h_usd=_float(r.get("volume_24h_usd")),
+        # Sprint 3 scoring columns
+        score=_float(r.get("score")),
+        confidence=_float(r.get("confidence")),
+        risk_level=str(r.get("risk_level") or "UNKNOWN"),
+        alert_sent_at=r.get("alert_sent_at"),
     )
 
 

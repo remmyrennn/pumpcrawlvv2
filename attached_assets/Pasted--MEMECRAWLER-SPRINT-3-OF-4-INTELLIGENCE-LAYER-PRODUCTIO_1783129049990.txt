@@ -1,0 +1,655 @@
+# MEMECRAWLER — SPRINT 3 OF 4
+# INTELLIGENCE LAYER
+# PRODUCTION IMPLEMENTATION
+
+You are continuing an EXISTING production codebase called MemeCrawler.
+
+STOP.
+
+Before writing ANY code, read the ENTIRE repository.
+
+Understand every module, every dependency, every import, every folder and the complete architecture.
+
+Never assume anything.
+
+Never recreate existing files.
+
+Never redesign the project.
+
+Never replace working code.
+
+You are EXTENDING an existing application.
+
+========================================================
+PROJECT
+========================================================
+
+Language:
+Python 3.12
+
+Environment:
+Replit
+
+Repository:
+GitHub
+
+Deployment:
+Render (AFTER Sprint 4 ONLY)
+
+Database:
+SQLite
+Prepared Supabase sync
+
+Framework:
+FastAPI
+
+Bot:
+Telegram
+
+Architecture:
+Fully asynchronous
+
+========================================================
+NON NEGOTIABLE RULES
+========================================================
+
+These rules override EVERYTHING.
+
+1.
+
+Read the entire project before coding.
+
+2.
+
+Preserve ALL architecture.
+
+3.
+
+Preserve ALL folder names.
+
+4.
+
+Preserve ALL filenames.
+
+5.
+
+Never rename modules.
+
+6.
+
+Never rewrite unrelated code.
+
+7.
+
+Never break existing imports.
+
+8.
+
+Never remove existing functionality.
+
+9.
+
+Never hardcode secrets.
+
+10.
+
+Never create duplicate logic.
+
+11.
+
+Always extend existing modules instead of replacing them.
+
+12.
+
+One shared Async HTTP client ONLY.
+
+13.
+
+One DatabaseManager ONLY.
+
+14.
+
+One ProviderManager ONLY.
+
+15.
+
+Everything asynchronous where appropriate.
+
+16.
+
+All code must remain compatible with
+
+• Replit
+
+• GitHub
+
+• Render
+
+17.
+
+Project must remain deployable after this sprint.
+
+18.
+
+If implementing a feature requires modifying multiple files, update ALL required files within the same response.
+
+Never leave partial implementations.
+
+19.
+
+No placeholders.
+
+No TODOs.
+
+No fake implementations.
+
+20.
+
+Every completed response must represent a repository that could be committed directly to GitHub.
+
+========================================================
+MISSION
+========================================================
+
+Sprint 3 implements the intelligence layer.
+
+After Sprint 3 the bot should think before alerting.
+
+The bot should NEVER alert from a single scan.
+
+Everything should use historical information.
+
+========================================================
+IMPLEMENT
+========================================================
+
+1.
+
+Scoring Engine
+
+Modular
+
+Weighted
+
+Configurable
+
+Stateless
+
+Each scoring module returns
+
+score
+
+max_score
+
+reason
+
+details
+
+Final score must use weighted normalization.
+
+Never sum raw scores.
+
+========================================================
+
+Trend Engine
+
+Analyse historical scans.
+
+Measure
+
+MC trend
+
+Liquidity trend
+
+Volume trend
+
+Buy trend
+
+Sell trend
+
+Growth consistency
+
+Reward steady growth.
+
+Penalize pumps.
+
+========================================================
+
+Liquidity Engine
+
+Evaluate
+
+Current liquidity
+
+Liquidity growth
+
+LP ratio
+
+Liquidity stability
+
+Liquidity removal
+
+========================================================
+
+Market Cap Engine
+
+Preferred range
+
+25K
+
+↓
+
+300K
+
+Do NOT instantly reject outside range.
+
+Reduce score gradually.
+
+========================================================
+
+Volume Engine
+
+Evaluate
+
+Organic volume
+
+Volume growth
+
+Consistency
+
+Suspicious spikes
+
+========================================================
+
+Buy Pressure Engine
+
+Evaluate
+
+Buy/Sell ratio
+
+Momentum
+
+Historical improvement
+
+========================================================
+
+Stability Engine
+
+Evaluate
+
+Market cap stability
+
+Liquidity stability
+
+Recovery behaviour
+
+Crash behaviour
+
+========================================================
+
+Age Engine
+
+Evaluate maturity.
+
+Do NOT use hard cutoffs.
+
+========================================================
+
+Social Engine
+
+Evaluate
+
+Website
+
+Twitter/X
+
+Telegram
+
+Description
+
+Logo
+
+Metadata quality
+
+========================================================
+
+Risk Engine
+
+Use RugCheck
+
+Helius
+
+RPC
+
+Developer concentration
+
+Holder concentration
+
+Authority checks
+
+Liquidity risks
+
+Produce
+
+LOW
+
+MEDIUM
+
+HIGH
+
+CRITICAL
+
+========================================================
+
+Confidence Engine
+
+Independent from score.
+
+Confidence increases when
+
+Historical agreement
+
+Multiple rescans
+
+Stable trend
+
+Low risk
+
+Good data quality
+
+Confidence is percentage.
+
+========================================================
+
+Reason Engine
+
+Generate explainable decisions.
+
+Every reason must originate from an actual scoring module.
+
+Never invent reasons.
+
+========================================================
+
+Market Mode
+
+Bull
+
+Neutral
+
+Weak
+
+Thresholds configurable.
+
+Never hardcode.
+
+========================================================
+
+Ranking Engine
+
+Maintain leaderboard.
+
+Top 5
+
+Top 10
+
+Highest confidence
+
+Highest conviction
+
+Highest improvement
+
+========================================================
+
+Alert Engine
+
+Alert ONLY after
+
+Multiple rescans
+
+Required score
+
+Required confidence
+
+Acceptable risk
+
+No cooldown
+
+Prevent duplicate alerts.
+
+Duplicate prevention MUST be database-backed.
+
+Handle race conditions correctly.
+
+========================================================
+
+Milestone Tracker
+
+Continue monitoring alerted tokens.
+
+Notify
+
+25%
+
+50%
+
+100%
+
+200%
+
+500%
+
+1000%
+
+Detect
+
+ATH
+
+Drawdowns
+
+Rug
+
+Death
+
+Archive outcomes.
+
+========================================================
+
+Heartbeat
+
+Replace ambient messages.
+
+Display
+
+Runtime
+
+Watching
+
+Alerts
+
+Best performer
+
+Provider health
+
+Database
+
+Average scan time
+
+========================================================
+
+Telegram
+
+Implement
+
+/leaderboard
+
+/watchlist
+
+/token
+
+/heartbeat
+
+/marketmode
+
+/editfilters
+
+Keep authorization.
+
+========================================================
+
+DATABASE
+========================================================
+
+Persist
+
+Scores
+
+Confidence
+
+Reasons
+
+Rankings
+
+Milestones
+
+Outcomes
+
+Historical evaluations
+
+Do NOT break previous migrations.
+
+Maintain migration order exactly.
+
+========================================================
+
+LOGGING
+========================================================
+
+Log
+
+Scoring
+
+Ranking
+
+Alert decisions
+
+Milestones
+
+Risk updates
+
+Confidence
+
+Reasons
+
+Errors
+
+Retries
+
+========================================================
+
+STRICT DEPLOYMENT RULES
+========================================================
+
+This project will later deploy automatically
+
+GitHub
+
+↓
+
+Render
+
+Therefore
+
+Before finishing
+
+Verify
+
+FastAPI starts.
+
+Telegram starts.
+
+SQLite initializes.
+
+ProviderManager initializes.
+
+Scheduler initializes.
+
+No circular imports.
+
+No missing imports.
+
+No duplicate routes.
+
+No duplicate commands.
+
+No broken migrations.
+
+No broken startup.
+
+No broken shutdown.
+
+Health endpoint still works.
+
+Version endpoint still works.
+
+Feature flags still work.
+
+Environment variables still work.
+
+========================================================
+
+MANDATORY SELF REVIEW
+========================================================
+
+Read every modified file.
+
+Correct every syntax issue.
+
+Correct every type issue.
+
+Correct every import issue.
+
+Correct every dependency issue.
+
+Correct every architecture violation.
+
+Correct every duplicated logic.
+
+Correct every unfinished implementation.
+
+Correct every deployment issue.
+
+Correct every startup issue.
+
+Correct every shutdown issue.
+
+Correct every database issue.
+
+Correct every scheduler issue.
+
+Correct every provider issue.
+
+Do NOT ask the user to manually fix anything.
+
+Fix it yourself.
+
+========================================================
+
+STOP CONDITION
+========================================================
+
+When Sprint 3 is COMPLETE
+
+STOP.
+
+Do NOT continue to Sprint 4.
+
+Do NOT suggest additional features.
+
+Do NOT refactor unrelated modules.
+
+Wait for the next prompt.
+
+End your response with EXACTLY
+
+✅ Sprint 3 Complete. Awaiting Sprint 4.

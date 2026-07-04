@@ -1,1 +1,1 @@
-- [MemeCrawler project](memecrawler-project.md) — Python 3.12 FastAPI Telegram bot; runs on port 8000 via "MemeCrawler API" workflow; Sprint 2 complete.
+- [MemeCrawler project](memecrawler-project.md) — Python 3.12 FastAPI Telegram bot; runs on port 8000 via "MemeCrawler API" workflow; Sprint 3 complete.

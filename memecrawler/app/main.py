@@ -3,18 +3,26 @@ MemeCrawler FastAPI application.
 
 Startup sequence (enforced in :func:`lifespan`)
 ------------------------------------------------
-1. Initialise logger
-2. Load configuration
-3. Connect SQLite
-4. Create HTTP client
-5. Initialise Cache
-6. Initialise Provider Manager
-7. Initialise Watchlist Manager
-8. Initialise Discovery Engine
-9. Initialise Token Scanner
+ 1. Initialise logger
+ 2. Load configuration
+ 3. Connect SQLite
+ 4. Create HTTP client
+ 5. Initialise Cache
+ 6. Initialise Provider Manager
+ 7. Initialise Watchlist Manager
+ 8. Initialise Discovery Engine
+ 9. Initialise Token Scanner
 10. Initialise Telegram bot (when BOT_TOKEN is set)
-11. Initialise Scheduler + register jobs
-12. Start FastAPI (uvicorn does this externally)
+11. Initialise Sprint 3 Intelligence Layer
+    11a. ScoringEngine
+    11b. MarketModeDetector
+    11c. RankingEngine
+    11d. AlertEngine
+    11e. MilestoneTracker
+    11f. Inject into TokenScanner
+12. Initialise Heartbeat (real status messages in Sprint 3)
+13. Initialise Scheduler + register jobs
+14. Start FastAPI (uvicorn does this externally)
 
 Shutdown sequence
 -----------------
@@ -35,6 +43,11 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 import app as app_module
+from app.analysis.alert_engine import AlertEngine
+from app.analysis.market_mode import MarketModeDetector
+from app.analysis.milestone import MilestoneTracker
+from app.analysis.ranking import RankingEngine
+from app.analysis.scorer import ScoringEngine
 from app.cache.manager import CacheManager
 from app.config.settings import get_settings
 from app.database.manager import DatabaseManager
@@ -65,6 +78,11 @@ _scheduler: Scheduler | None = None
 _cache: CacheManager | None = None
 _watchlist: WatchlistManager | None = None
 _scanner: TokenScanner | None = None
+_scorer: ScoringEngine | None = None
+_ranking: RankingEngine | None = None
+_alert_engine: AlertEngine | None = None
+_milestone: MilestoneTracker | None = None
+_market_mode: MarketModeDetector | None = None
 
 logger = logging.getLogger(__name__)
 
@@ -81,9 +99,10 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     ``application.state`` for access in route handlers.
     """
     global _db, _provider_manager, _telegram_bot, _scheduler, _cache
-    global _watchlist, _scanner
+    global _watchlist, _scanner, _scorer, _ranking, _alert_engine
+    global _milestone, _market_mode
 
-    # 1. Logger ────────────────────────────────────────────────────────────────
+    # 1. Logger
     settings = get_settings()
     setup_logging(settings.log_level)
     logger.info(
@@ -92,28 +111,25 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         app_module.__sprint__,
     )
 
-    # 2. Configuration — already loaded via get_settings() above.
-
-    # Steps 3–11 run inside a try block so that a partial-startup failure
-    # triggers graceful teardown of already-opened resources.
     try:
-        # 3. Database ──────────────────────────────────────────────────────────
+        # 3. Database
         _db = DatabaseManager(settings.sqlite_path)
         await _db.connect()
         application.state.db = _db
 
-        # 4. HTTP client ───────────────────────────────────────────────────────
+        # 4. HTTP client
         http_client = await create_http_client()
 
-        # 5. Cache ─────────────────────────────────────────────────────────────
+        # 5. Cache
         _cache = CacheManager()
         application.state.cache = _cache
 
-        # 6. Provider Manager ──────────────────────────────────────────────────
+        # 6. Provider Manager
         _provider_manager = ProviderManager()
 
         _dexscreener: DexScreenerProvider | None = None
         _pumpfun: PumpFunProvider | None = None
+        _rugcheck_provider: RugCheckProvider | None = None
 
         if settings.enable_dexscreener:
             _dexscreener = DexScreenerProvider(http_client)
@@ -130,17 +146,18 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                 "ENABLE_HELIUS is True but HELIUS_API_KEY is not set — skipping Helius."
             )
         if settings.enable_rugcheck:
-            _provider_manager.register(RugCheckProvider(http_client))
+            _rugcheck_provider = RugCheckProvider(http_client)
+            _provider_manager.register(_rugcheck_provider)
         _provider_manager.register(SolanaRpcProvider(http_client))
 
         await _provider_manager.check_all()
         application.state.provider_manager = _provider_manager
 
-        # 7. Watchlist Manager ─────────────────────────────────────────────────
+        # 7. Watchlist Manager
         _watchlist = WatchlistManager(db=_db, cache=_cache)
         application.state.watchlist = _watchlist
 
-        # 8. Discovery Engine ──────────────────────────────────────────────────
+        # 8. Discovery Engine
         _discovery = DiscoveryEngine(
             dexscreener=_dexscreener,
             pumpfun=_pumpfun,
@@ -151,7 +168,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         )
         application.state.discovery = _discovery
 
-        # 9. Token Scanner ─────────────────────────────────────────────────────
+        # 9. Token Scanner
         _scanner = TokenScanner(
             provider_manager=_provider_manager,
             watchlist=_watchlist,
@@ -161,7 +178,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         )
         application.state.scanner = _scanner
 
-        # 10. Telegram ─────────────────────────────────────────────────────────
+        # 10. Telegram (constructed before intelligence — alert engine needs it)
+        _telegram_bot = None
         if settings.bot_configured:
             try:
                 _telegram_bot = TelegramBot(
@@ -169,30 +187,87 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                     authorized_user_ids=settings.authorized_user_ids,
                     target_chat=settings.target_chat,
                 )
-                # Inject runtime singletons so handlers display live data.
-                _telegram_bot.set_runtime_context(
-                    provider_manager=_provider_manager,
-                    watchlist=_watchlist,
-                    scanner=_scanner,
-                )
-                await _telegram_bot.start()
             except (TelegramNotConfiguredError, Exception) as exc:
-                logger.warning("Telegram bot not started: %s", exc)
+                logger.warning("TelegramBot construction failed: %s", exc)
                 _telegram_bot = None
         else:
             logger.warning(
                 "BOT_TOKEN is not set — Telegram bot disabled. "
                 "Set BOT_TOKEN in .env to enable it."
             )
-        application.state.telegram_bot = _telegram_bot
 
-        # 11. Scheduler ────────────────────────────────────────────────────────
-        _scheduler = Scheduler()
+        # 11. Sprint 3: Intelligence Layer ─────────────────────────────────────
 
+        # 11a. Scoring Engine (stateless — instantiate with settings)
+        _scorer = ScoringEngine(settings=settings)
+        application.state.scorer = _scorer
+
+        # 11b. Market Mode Detector
+        _market_mode = MarketModeDetector(db=_db, settings=settings)
+        application.state.market_mode = _market_mode
+
+        # 11c. Ranking Engine
+        _ranking = RankingEngine(db=_db)
+        application.state.ranking = _ranking
+
+        # 11d. Alert Engine (needs DB, watchlist, optional Telegram)
+        _alert_engine = AlertEngine(
+            db=_db,
+            watchlist=_watchlist,
+            telegram_bot=_telegram_bot,
+        )
+        application.state.alert_engine = _alert_engine
+
+        # 11e. Milestone Tracker (needs DB, optional Telegram)
+        _milestone = MilestoneTracker(db=_db, telegram_bot=_telegram_bot)
+        application.state.milestone = _milestone
+
+        # 11f. Inject intelligence context into TokenScanner
+        _scanner.set_intelligence_context(
+            scorer=_scorer,
+            alert_engine=_alert_engine,
+            ranking=_ranking,
+            milestone=_milestone,
+            market_mode=_market_mode,
+            db=_db,
+            rugcheck=_rugcheck_provider,
+        )
+        logger.info("Sprint 3 intelligence layer initialised.")
+
+        # 12. Heartbeat (full implementation in Sprint 3)
         heartbeat = Heartbeat(
             interval_seconds=settings.heartbeat_interval,
             enabled=settings.enable_heartbeat,
         )
+        heartbeat.set_runtime_context(
+            telegram_bot=_telegram_bot,
+            db=_db,
+            watchlist=_watchlist,
+            scanner=_scanner,
+            provider_manager=_provider_manager,
+            start_time=_start_time,
+        )
+
+        # 10 (continued): Complete Telegram setup with all Sprint 3 singletons
+        if _telegram_bot is not None:
+            try:
+                _telegram_bot.set_runtime_context(
+                    provider_manager=_provider_manager,
+                    watchlist=_watchlist,
+                    scanner=_scanner,
+                    db=_db,
+                    ranking_engine=_ranking,
+                    market_mode_detector=_market_mode,
+                    heartbeat=heartbeat,
+                )
+                await _telegram_bot.start()
+            except Exception as exc:
+                logger.warning("Telegram bot start failed: %s", exc)
+                _telegram_bot = None
+        application.state.telegram_bot = _telegram_bot
+
+        # 13. Scheduler
+        _scheduler = Scheduler()
         heartbeat.register_with_scheduler(_scheduler)
 
         if settings.enable_scanner:
@@ -216,7 +291,6 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         logger.critical(
             "Startup failed — initiating emergency cleanup: %s", exc
         )
-        # Tear down any resources that were successfully opened.
         for label, coro in [
             ("scheduler",   _scheduler.stop() if _scheduler else None),
             ("telegram",    _telegram_bot.stop() if _telegram_bot else None),
@@ -233,10 +307,9 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                 )
         raise
 
-    # ── Yield: application is running ─────────────────────────────────────────
     yield
 
-    # ── Shutdown (fault-isolated — every step runs regardless of errors) ───────
+    # ── Shutdown ───────────────────────────────────────────────────────────────
     logger.info("MemeCrawler shutting down.")
     shutdown_errors: list[str] = []
 
@@ -268,14 +341,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 # ── Application factory ────────────────────────────────────────────────────────
 
 def create_app() -> FastAPI:
-    """
-    Create and configure the FastAPI application instance.
-
-    Returns
-    -------
-    FastAPI
-        The configured application, ready to be served by uvicorn.
-    """
+    """Create and configure the FastAPI application instance."""
     application = FastAPI(
         title="MemeCrawler",
         description="Solana memecoin research engine API.",
@@ -285,44 +351,28 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
     )
 
-    # ── Routes ─────────────────────────────────────────────────────────────
-
     @application.get("/", summary="Root liveness check")
     async def root() -> JSONResponse:
-        """Return a simple online status indicator."""
         return JSONResponse(
             content={
                 "status": "online",
                 "service": "MemeCrawler",
                 "version": app_module.__version__,
+                "sprint": app_module.__sprint__,
             }
         )
 
     @application.get("/health", summary="Detailed health status")
     async def health() -> JSONResponse:
-        """
-        Return the full health status of all subsystems.
-
-        Response fields
-        ---------------
-        - ``status``         — "healthy" | "degraded" | "starting"
-        - ``uptime_seconds`` — seconds since process start
-        - ``version``        — application version string
-        - ``sprint``         — current sprint number
-        - ``timestamp``      — ISO 8601 UTC timestamp
-        - ``database``       — SQLite health summary
-        - ``telegram``       — Telegram bot status
-        - ``providers``      — Provider Manager summary
-        - ``scheduler``      — Scheduler summary
-        - ``cache``          — Cache statistics
-        - ``scanner``        — Scanner cycle statistics
-        """
+        """Return the full health status of all subsystems."""
         db_health = await _db.health_check() if _db else {"connected": False}
         provider_info = _provider_manager.info() if _provider_manager else {}
         telegram_info = _telegram_bot.info() if _telegram_bot else {"running": False}
         scheduler_info = _scheduler.info() if _scheduler else {"running": False}
         cache_info = _cache.info() if _cache else {}
         scanner_info = _scanner.info() if _scanner else {}
+        market_info = _market_mode.info() if _market_mode else {}
+        ranking_info = _ranking.info() if _ranking else {}
 
         overall_status = "healthy"
         if not db_health.get("connected"):
@@ -341,6 +391,8 @@ def create_app() -> FastAPI:
                 "scheduler": scheduler_info,
                 "cache": cache_info,
                 "scanner": scanner_info,
+                "market_mode": market_info,
+                "ranking": ranking_info,
             }
         )
 

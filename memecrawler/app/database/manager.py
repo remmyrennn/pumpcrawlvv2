@@ -143,6 +143,52 @@ CREATE TABLE IF NOT EXISTS logs (
 );
 """
 
+_CREATE_EVALUATIONS = """
+CREATE TABLE IF NOT EXISTS evaluations (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    mint        TEXT    NOT NULL,
+    score       REAL    NOT NULL,
+    max_score   REAL    NOT NULL DEFAULT 100.0,
+    confidence  REAL    NOT NULL DEFAULT 0.0,
+    risk_level  TEXT    NOT NULL DEFAULT 'UNKNOWN',
+    reasons     TEXT    NOT NULL DEFAULT '[]',
+    details     TEXT    NOT NULL DEFAULT '{}',
+    market_mode TEXT    NOT NULL DEFAULT 'NEUTRAL',
+    scan_count  INTEGER NOT NULL DEFAULT 0,
+    evaluated_at TEXT   NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
+_CREATE_RANKINGS = """
+CREATE TABLE IF NOT EXISTS rankings (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    mint        TEXT    NOT NULL UNIQUE,
+    symbol      TEXT    NOT NULL DEFAULT '',
+    score       REAL    NOT NULL DEFAULT 0.0,
+    confidence  REAL    NOT NULL DEFAULT 0.0,
+    risk_level  TEXT    NOT NULL DEFAULT 'UNKNOWN',
+    rank        INTEGER NOT NULL DEFAULT 0,
+    rank_type   TEXT    NOT NULL DEFAULT 'conviction',
+    ranked_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
+_CREATE_OUTCOMES = """
+CREATE TABLE IF NOT EXISTS outcomes (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    mint                TEXT    NOT NULL UNIQUE,
+    alert_id            INTEGER,
+    entry_price_usd     REAL,
+    peak_price_usd      REAL,
+    current_price_usd   REAL,
+    peak_gain_pct       REAL    NOT NULL DEFAULT 0.0,
+    current_gain_pct    REAL    NOT NULL DEFAULT 0.0,
+    outcome             TEXT    NOT NULL DEFAULT 'TRACKING',
+    tracked_since       TEXT    NOT NULL DEFAULT (datetime('now')),
+    last_updated        TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
 _ALL_DDL: list[str] = [
     _CREATE_TOKENS,
     _CREATE_WATCHLIST,
@@ -152,6 +198,9 @@ _ALL_DDL: list[str] = [
     _CREATE_MILESTONES,
     _CREATE_PROVIDERS,
     _CREATE_LOGS,
+    _CREATE_EVALUATIONS,
+    _CREATE_RANKINGS,
+    _CREATE_OUTCOMES,
 ]
 
 # ── Indexes ────────────────────────────────────────────────────────────────────
@@ -176,6 +225,17 @@ _SPRINT2_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_watchlist_next_scan ON watchlist(next_scan_at);",
 ]
 
+# Sprint 3 indexes — applied after Sprint 3 column migrations.
+_SPRINT3_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_evaluations_mint ON evaluations(mint);",
+    "CREATE INDEX IF NOT EXISTS idx_evaluations_mint_at ON evaluations(mint, evaluated_at);",
+    "CREATE INDEX IF NOT EXISTS idx_evaluations_score ON evaluations(score DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_rankings_score ON rankings(score DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_rankings_mint ON rankings(mint);",
+    "CREATE INDEX IF NOT EXISTS idx_outcomes_mint ON outcomes(mint);",
+    "CREATE INDEX IF NOT EXISTS idx_milestones_mint_kind ON milestones(mint, kind);",
+]
+
 # ── Additive migrations (Sprint 2) ────────────────────────────────────────────
 # Each entry is (table, column, column_def). Applied with ALTER TABLE ADD COLUMN;
 # ignored (silently) when the column already exists.
@@ -198,6 +258,16 @@ _SPRINT2_MIGRATIONS: list[tuple[str, str, str]] = [
     ("history",   "buys_5m",        "INTEGER"),
     ("history",   "sells_5m",       "INTEGER"),
     ("history",   "age_seconds",    "REAL"),
+]
+
+# ── Additive migrations (Sprint 3) ────────────────────────────────────────────
+_SPRINT3_MIGRATIONS: list[tuple[str, str, str]] = [
+    ("watchlist", "score",          "REAL"),
+    ("watchlist", "confidence",     "REAL"),
+    ("watchlist", "risk_level",     "TEXT NOT NULL DEFAULT 'UNKNOWN'"),
+    ("watchlist", "alert_sent_at",  "TEXT"),
+    ("milestones", "kind",          "TEXT NOT NULL DEFAULT ''"),
+    ("milestones", "metadata",      "TEXT NOT NULL DEFAULT '{}'"),
 ]
 
 
@@ -276,13 +346,15 @@ class DatabaseManager:
         Apply additive column migrations then create any dependent indexes.
 
         Each ``ALTER TABLE … ADD COLUMN …`` is silently ignored when the
-        column already exists (idempotent). Sprint 2 indexes that reference
+        column already exists (idempotent). Sprint indexes that reference
         new columns are created here, after the columns are guaranteed to
         exist.
         """
         assert self._conn is not None
         applied = 0
-        for table, column, col_def in _SPRINT2_MIGRATIONS:
+
+        all_migrations = _SPRINT2_MIGRATIONS + _SPRINT3_MIGRATIONS
+        for table, column, col_def in all_migrations:
             try:
                 await self._conn.execute(
                     f"ALTER TABLE {table} ADD COLUMN {column} {col_def};"
@@ -296,12 +368,12 @@ class DatabaseManager:
         if applied:
             logger.info("Applied %d schema migration(s).", applied)
 
-        # Create Sprint 2 indexes (safe now that columns exist).
+        # Create Sprint 2 + Sprint 3 indexes (safe now that columns exist).
         async with self._conn.cursor() as cursor:
-            for idx_ddl in _SPRINT2_INDEXES:
+            for idx_ddl in _SPRINT2_INDEXES + _SPRINT3_INDEXES:
                 await cursor.execute(idx_ddl)
         await self._conn.commit()
-        logger.debug("Sprint 2 indexes ensured.")
+        logger.debug("Sprint 2 + Sprint 3 indexes ensured.")
 
     # ── Connection access ──────────────────────────────────────────────────
 

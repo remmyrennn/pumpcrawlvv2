@@ -212,10 +212,111 @@ class Settings(BaseSettings):
         """True when a Helius API key has been supplied."""
         return bool(self.helius_api_key.strip())
 
+    # ── Sprint 3: Alert thresholds ────────────────────────────────────────
+    min_alert_score: float = Field(
+        default=65.0,
+        ge=0.0,
+        le=100.0,
+        description="Minimum conviction score (0–100) required to dispatch an alert.",
+    )
+    min_alert_confidence: float = Field(
+        default=60.0,
+        ge=0.0,
+        le=100.0,
+        description="Minimum confidence percentage (0–100) required to dispatch an alert.",
+    )
+    min_alert_scans: int = Field(
+        default=3,
+        ge=1,
+        description="Minimum number of rescans before an alert can be dispatched.",
+    )
+    max_alert_risk: str = Field(
+        default="MEDIUM",
+        description="Maximum acceptable risk level for alerts: LOW, MEDIUM, HIGH, CRITICAL.",
+    )
+
+    # ── Sprint 3: Market mode thresholds ──────────────────────────────────
+    market_mode_bull_ratio: float = Field(
+        default=0.60,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of tokens with positive trend required for BULL market mode.",
+    )
+    market_mode_weak_ratio: float = Field(
+        default=0.30,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of tokens with positive trend below which WEAK mode is declared.",
+    )
+
+    # ── Sprint 3: Scoring engine weights ──────────────────────────────────
+    # These do NOT need to sum to 1.0 — the scorer normalises them.
+    score_weight_trend: float = Field(
+        default=0.25,
+        ge=0.0,
+        description="Weight for the Trend scoring engine.",
+    )
+    score_weight_volume: float = Field(
+        default=0.15,
+        ge=0.0,
+        description="Weight for the Volume scoring engine.",
+    )
+    score_weight_buy_pressure: float = Field(
+        default=0.15,
+        ge=0.0,
+        description="Weight for the Buy Pressure scoring engine.",
+    )
+    score_weight_liquidity: float = Field(
+        default=0.15,
+        ge=0.0,
+        description="Weight for the Liquidity scoring engine.",
+    )
+    score_weight_market_cap: float = Field(
+        default=0.10,
+        ge=0.0,
+        description="Weight for the Market Cap scoring engine.",
+    )
+    score_weight_stability: float = Field(
+        default=0.10,
+        ge=0.0,
+        description="Weight for the Stability scoring engine.",
+    )
+    score_weight_age: float = Field(
+        default=0.05,
+        ge=0.0,
+        description="Weight for the Age scoring engine.",
+    )
+    score_weight_social: float = Field(
+        default=0.05,
+        ge=0.0,
+        description="Weight for the Social scoring engine.",
+    )
+
     @property
     def supabase_configured(self) -> bool:
         """True when Supabase credentials have been supplied."""
         return bool(self.supabase_url.strip() and self.supabase_key.strip())
+
+
+# ── Runtime overrides (mutable, in-process only) ──────────────────────────────
+# Modified by /editfilters Telegram command. Not persisted across restarts.
+
+_runtime_overrides: dict[str, object] = {}
+
+
+def get_runtime_override(key: str, default: object = None) -> object:
+    """Return a runtime override if set, otherwise the supplied default."""
+    return _runtime_overrides.get(key, default)
+
+
+def set_runtime_override(key: str, value: object) -> None:
+    """Store a runtime override value (overrides the corresponding Setting)."""
+    _runtime_overrides[key] = value
+
+
+def clear_runtime_override(key: str) -> None:
+    """Remove a runtime override, restoring the Setting's default."""
+    _runtime_overrides.pop(key, None)
 
 
 @lru_cache(maxsize=1)
