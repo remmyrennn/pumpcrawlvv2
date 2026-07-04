@@ -1,4 +1,4 @@
-modules = ["nodejs-24"]
+modules = ["nodejs-24", "python-3.12"]
 
 [deployment]
 router = "application"
@@ -11,6 +11,27 @@ env = { "CI" = "true" }
 [workflows]
 runButton = "Project"
 
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "MemeCrawler API"
+
+[[workflows.workflow]]
+name = "MemeCrawler API"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd memecrawler && python run.py"
+waitForPort = 8000
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
 [agent]
 stack = "PNPM_WORKSPACE"
 expertMode = true
@@ -18,3 +39,32 @@ expertMode = true
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
+
+[userenv]
+
+[userenv.shared]
+ENABLE_DEXSCREENER = "true"
+ENABLE_HEARTBEAT = "true"
+ENABLE_HELIUS = "false"
+ENABLE_PUMPFUN = "true"
+ENABLE_RUGCHECK = "true"
+ENABLE_SUPABASE_SYNC = "false"
+HEARTBEAT_INTERVAL = "3600"
+LOG_LEVEL = "INFO"
+SCAN_INTERVAL = "300"
+SQLITE_PATH = "memecrawler.db"
+BLACKLISTED_DEVELOPERS = ""
+BLACKLISTED_TOKENS = ""
+DISCOVERY_LIMIT = "50"
+ENABLE_SCANNER = "true"
+MIN_LIQUIDITY_USD = "500.0"
+PRIORITY_CRITICAL_LIQUIDITY = "100000"
+PRIORITY_CRITICAL_VOLUME = "500000"
+PRIORITY_HIGH_LIQUIDITY = "50000"
+PRIORITY_HIGH_VOLUME = "100000"
+PRIORITY_MEDIUM_LIQUIDITY = "10000"
+PRIORITY_MEDIUM_VOLUME = "10000"
+
+[nix]
+channel = "stable-25_05"
+packages = ["libxcrypt"]
