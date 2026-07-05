@@ -507,7 +507,7 @@ async def _cmd_heartbeat(
         return
 
     try:
-        await heartbeat.send()
+        await heartbeat.tick()
     except Exception as exc:
         logger.error("_cmd_heartbeat: error: %s", exc)
         await update.message.reply_text("❌ Failed to send heartbeat.")
