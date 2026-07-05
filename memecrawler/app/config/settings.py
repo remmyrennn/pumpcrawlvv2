@@ -112,6 +112,13 @@ class Settings(BaseSettings):
         default="",
         description="Comma-separated list of developer wallet addresses to always reject.",
     )
+    broadcast_chats: str = Field(
+        default="",
+        description=(
+            "Extra chat IDs to broadcast alerts and heartbeats to, with optional names. "
+            "Format: 'chat_id:Name,chat_id:Name' e.g. '-100123:Alpha,-100456:Beta Calls'"
+        ),
+    )
 
     # ── Priority thresholds ───────────────────────────────────────────────
     priority_critical_volume: float = Field(
@@ -284,6 +291,23 @@ class Settings(BaseSettings):
     def normalise_log_level(cls, value: str) -> str:
         """Ensure log level is always uppercased."""
         return value.upper()
+
+    @property
+    def broadcast_chat_list(self) -> list[dict[str, str]]:
+        """Return broadcast chats as a list of {id, name} dicts."""
+        result: list[dict[str, str]] = []
+        if not self.broadcast_chats.strip():
+            return result
+        for entry in self.broadcast_chats.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            if ":" in entry:
+                chat_id, _, name = entry.partition(":")
+                result.append({"id": chat_id.strip(), "name": name.strip() or chat_id.strip()})
+            else:
+                result.append({"id": entry, "name": entry})
+        return result
 
     @property
     def authorized_user_ids(self) -> list[int]:

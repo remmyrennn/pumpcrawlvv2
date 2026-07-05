@@ -21,6 +21,7 @@ from functools import wraps
 from typing import TYPE_CHECKING, Callable, Optional
 
 from telegram import Update
+from telegram import ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 import app as app_module
@@ -39,6 +40,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _MODULE_LOADED_AT: str = utcnow_iso()
+
+# ── Persistent reply keyboard ─────────────────────────────────────────────────
+
+_KEYBOARD = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton("/stats"),        KeyboardButton("/heartbeat"),   KeyboardButton("/ping")],
+        [KeyboardButton("/watch"),        KeyboardButton("/watchlist"),   KeyboardButton("/leaderboard")],
+        [KeyboardButton("/marketmode"),   KeyboardButton("/editfilters"), KeyboardButton("/token")],
+        [KeyboardButton("/health"),       KeyboardButton("/providers"),   KeyboardButton("/runtime")],
+        [KeyboardButton("/database"),     KeyboardButton("/cache"),       KeyboardButton("/chats")],
+        [KeyboardButton("/diagnostics"),  KeyboardButton("/version"),     KeyboardButton("/help")],
+    ],
+    resize_keyboard=True,
+    persistent=True,
+)
 
 # ── Auth decorator ────────────────────────────────────────────────────────────
 
@@ -81,9 +97,10 @@ async def _cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         "It continuously scans Solana tokens, evaluates risk, tracks promising "
         "projects over time, and only alerts you after multiple confirmations.\n\n"
         "<b>Philosophy:</b> Quality over quantity. No sniping. No FOMO.\n\n"
-        "Use /help to see available commands."
+        "All commands are shown as buttons below — tap any to run it.\n"
+        "Use /help for descriptions, /menu to reopen the keyboard."
     )
-    await update.message.reply_text(text, parse_mode="HTML")
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=_KEYBOARD)
 
 
 async def _cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -111,9 +128,12 @@ async def _cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/database     — SQLite health and row counts\n"
         "/cache        — In-process cache statistics\n\n"
         "<b>Configuration</b>\n"
-        "/editfilters  — View or adjust runtime filters"
+        "/editfilters  — View or adjust runtime filters\n\n"
+        "<b>Broadcast</b>\n"
+        "/chats        — List active broadcast targets\n"
+        "/menu         — Reopen the command keyboard"
     )
-    await update.message.reply_text(text, parse_mode="HTML")
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=_KEYBOARD)
 
 
 async def _cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -872,6 +892,47 @@ async def _cmd_cache(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text(text, parse_mode="HTML")
 
 
+async def _cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /menu — Reopen the persistent command keyboard.
+    """
+    await update.message.reply_text(
+        "⌨️ Command keyboard restored.",
+        reply_markup=_KEYBOARD,
+    )
+
+
+async def _cmd_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /chats — List all active broadcast targets.
+    """
+    broadcast_chats: list[dict[str, str]] = (
+        context.bot_data.get("broadcast_chats") or []
+        if context.bot_data else []
+    )
+    target_chat: str = (
+        context.bot_data.get("target_chat", "")
+        if context.bot_data else ""
+    )
+
+    lines = ["📡 <b>Broadcast Targets</b>\n"]
+    lines.append(f"🏠 <b>Primary:</b> {target_chat or '—'}")
+
+    if broadcast_chats:
+        lines.append("\n<b>Extra broadcast chats:</b>")
+        for i, chat in enumerate(broadcast_chats, 1):
+            lines.append(f"  {i}. <b>{chat.get('name', '?')}</b> — <code>{chat.get('id', '?')}</code>")
+    else:
+        lines.append("\n<i>No extra broadcast chats configured.</i>")
+        lines.append("\nTo add one, set <code>BROADCAST_CHATS</code> in your env:")
+        lines.append("<code>BROADCAST_CHATS=-100123:Group Name,-100456:Another</code>")
+
+    total = 1 + len(broadcast_chats) if target_chat else len(broadcast_chats)
+    lines.append(f"\n<b>Total recipients:</b> {total}")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
 # ── Registration ──────────────────────────────────────────────────────────────
 
 def register(
@@ -887,6 +948,7 @@ def register(
     heartbeat: Optional["Heartbeat"] = None,
     cache: Optional["CacheManager"] = None,
     start_time: Optional[float] = None,
+    broadcast_chats: Optional[list[dict[str, str]]] = None,
 ) -> None:
     """
     Register all command handlers on the given Application.
@@ -904,6 +966,8 @@ def register(
     # Sprint 4
     application.bot_data["cache"] = cache
     application.bot_data["start_time"] = start_time
+    # Sprint 5
+    application.bot_data["broadcast_chats"] = broadcast_chats or []
 
     auth = _authorised(authorized_user_ids)
 
@@ -929,6 +993,9 @@ def register(
         ("runtime",     auth(_cmd_runtime)),
         ("database",    auth(_cmd_database)),
         ("cache",       auth(_cmd_cache)),
+        # Sprint 5
+        ("menu",        auth(_cmd_menu)),
+        ("chats",       auth(_cmd_chats)),
     ]
 
     for command, handler_func in handlers:

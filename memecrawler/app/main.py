@@ -193,6 +193,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                     token=settings.bot_token,
                     authorized_user_ids=settings.authorized_user_ids,
                     target_chat=settings.target_chat,
+                    broadcast_chats=settings.broadcast_chat_list,
                 )
             except (TelegramNotConfiguredError, Exception) as exc:
                 logger.warning("TelegramBot construction failed: %s", exc)

@@ -60,6 +60,7 @@ class TelegramBot:
         token: str,
         authorized_user_ids: list[int],
         target_chat: str,
+        broadcast_chats: Optional[list[dict[str, str]]] = None,
     ) -> None:
         if not token.strip():
             raise TelegramNotConfiguredError(
@@ -69,6 +70,7 @@ class TelegramBot:
         self._token = token
         self._authorized_user_ids = authorized_user_ids
         self._target_chat = target_chat
+        self._broadcast_chats: list[dict[str, str]] = broadcast_chats or []
         self._app: Optional[Application] = None
 
         # Injected by set_runtime_context() before start()
@@ -144,6 +146,7 @@ class TelegramBot:
             heartbeat=self._heartbeat,
             cache=self._cache,
             start_time=self._start_time,
+            broadcast_chats=self._broadcast_chats,
         )
 
         await self._app.initialize()
@@ -178,7 +181,7 @@ class TelegramBot:
         disable_web_page_preview: bool = True,
     ) -> None:
         """
-        Send a text message to the target chat.
+        Send a text message to a single chat (target_chat by default).
 
         Parameters
         ----------
@@ -208,6 +211,46 @@ class TelegramBot:
         )
         logger.debug("Message sent to chat %s.", destination)
 
+    async def broadcast_message(
+        self,
+        text: str,
+        *,
+        parse_mode: str = "HTML",
+        disable_web_page_preview: bool = True,
+    ) -> None:
+        """
+        Send a message to target_chat AND every broadcast_chat.
+
+        Failures on individual chats are logged but do not stop delivery
+        to remaining chats.
+        """
+        if self._app is None:
+            raise RuntimeError(
+                "TelegramBot has not been started. Call start() first."
+            )
+        seen: set[str] = set()
+        targets: list[tuple[str, str]] = []
+        if self._target_chat:
+            targets.append((self._target_chat, "primary"))
+            seen.add(self._target_chat)
+        for chat in self._broadcast_chats:
+            cid = chat["id"]
+            if cid not in seen:
+                targets.append((cid, chat.get("name", cid)))
+                seen.add(cid)
+
+        for cid, label in targets:
+            try:
+                await self._app.bot.send_message(
+                    chat_id=cid,
+                    text=text,
+                    parse_mode=parse_mode,
+                    disable_web_page_preview=disable_web_page_preview,
+                )
+                logger.debug("Broadcast sent to %s (%s).", label, cid)
+            except Exception as exc:
+                logger.error("Broadcast failed for %s (%s): %s", label, cid, exc)
+
     # ── Status ────────────────────────────────────────────────────────────────
 
     @property
@@ -221,4 +264,5 @@ class TelegramBot:
             "running": self.is_running,
             "target_chat": self._target_chat,
             "authorized_users": len(self._authorized_user_ids),
+            "broadcast_chats": len(self._broadcast_chats),
         }
