@@ -53,7 +53,7 @@ _KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton("/diagnostics"),  KeyboardButton("/version"),     KeyboardButton("/help")],
     ],
     resize_keyboard=True,
-    persistent=True,
+    is_persistent=True,
 )
 
 # ── Auth decorator ────────────────────────────────────────────────────────────
