@@ -491,3 +491,159 @@ class DatabaseManager:
             "path": self.path,
             "table_count": len(rows),
         }
+
+    # ── Sprint 4: Maintenance operations ──────────────────────────────────
+
+    async def vacuum(self) -> None:
+        """
+        Run VACUUM to compact the SQLite file and reclaim free pages.
+
+        Safe to call at any time. Commits any pending transaction first.
+        """
+        if self._conn is None:
+            raise RuntimeError("Database is not connected.")
+        logger.info("Database: running VACUUM.")
+        await self._conn.execute("VACUUM;")
+        await self._conn.commit()
+        logger.info("Database: VACUUM complete.")
+
+    async def integrity_check(self) -> str:
+        """
+        Run PRAGMA integrity_check and return a summary string.
+
+        Returns
+        -------
+        str
+            ``"ok"`` when the database is healthy, or a comma-separated list
+            of up to five error descriptions when corruption is detected.
+        """
+        if self._conn is None:
+            raise RuntimeError("Database is not connected.")
+        rows = await self.fetchall("PRAGMA integrity_check;")
+        results = [str(r[0]) for r in rows]
+        if results == ["ok"]:
+            return "ok"
+        return "; ".join(results[:5])
+
+    async def cleanup_old_records(self, retention_days: int = 7) -> dict[str, int]:
+        """
+        Delete records older than *retention_days* from high-volume tables.
+
+        Tables cleaned:
+        - ``history``     — time-series market snapshots
+        - ``evaluations`` — per-token scoring results
+        - ``logs``        — structured log sink
+
+        Alert records are deliberately excluded; they are kept for audit.
+
+        Parameters
+        ----------
+        retention_days:
+            Records older than this many days are deleted.
+
+        Returns
+        -------
+        dict[str, int]
+            Mapping of ``{table_name: rows_deleted}`` for tables where at
+            least one row was removed.
+        """
+        if self._conn is None:
+            raise RuntimeError("Database is not connected.")
+
+        stats: dict[str, int] = {}
+        targets = [
+            ("history",     "recorded_at"),
+            ("evaluations", "evaluated_at"),
+            ("logs",        "logged_at"),
+        ]
+
+        for table, col in targets:
+            try:
+                cursor = await self._conn.execute(
+                    f"DELETE FROM {table} WHERE {col} < datetime('now', ?);"
+                    , (f"-{retention_days} days",),
+                )
+                await self._conn.commit()
+                if cursor.rowcount:
+                    stats[table] = cursor.rowcount
+                    logger.debug(
+                        "Cleanup: deleted %d rows from %s.", cursor.rowcount, table
+                    )
+            except Exception as exc:
+                logger.warning("Cleanup failed for %s: %s", table, exc)
+
+        return stats
+
+    async def backup(self, backup_dir: str = "backups") -> str | None:
+        """
+        Copy the SQLite database file to a timestamped backup.
+
+        Parameters
+        ----------
+        backup_dir:
+            Directory where backup files are stored. Created if absent.
+
+        Returns
+        -------
+        str | None
+            The path of the created backup file, or ``None`` on failure.
+        """
+        import os
+        import shutil
+
+        from app.utils.time_utils import utcnow
+
+        if not self.is_connected:
+            logger.warning("Backup skipped — database not connected.")
+            return None
+
+        if not os.path.exists(self.path):
+            logger.warning("Backup skipped — DB file not found at %s.", self.path)
+            return None
+
+        try:
+            os.makedirs(backup_dir, exist_ok=True)
+            ts = utcnow().strftime("%Y%m%d_%H%M%S")
+            backup_name = f"memecrawler_{ts}.db"
+            backup_path = os.path.join(backup_dir, backup_name)
+            shutil.copy2(self.path, backup_path)
+            logger.info("Database backed up to %s.", backup_path)
+            return backup_path
+        except Exception as exc:
+            logger.error("Database backup failed: %s", exc)
+            return None
+
+    async def table_row_counts(self) -> dict[str, int]:
+        """
+        Return the row count for every user table in the database.
+
+        Returns
+        -------
+        dict[str, int]
+            Mapping of ``{table_name: row_count}``.
+        """
+        if not self.is_connected:
+            return {}
+
+        rows = await self.fetchall(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
+        )
+        counts: dict[str, int] = {}
+        for row in rows:
+            table = row[0]
+            try:
+                count_row = await self.fetchone(
+                    f"SELECT COUNT(*) AS cnt FROM {table};"
+                )
+                counts[table] = count_row["cnt"] if count_row else 0
+            except Exception:
+                counts[table] = -1
+        return counts
+
+    async def db_file_size_bytes(self) -> int:
+        """Return the database file size in bytes, or 0 if unavailable."""
+        import os
+        try:
+            return os.path.getsize(self.path)
+        except OSError:
+            return 0

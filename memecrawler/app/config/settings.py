@@ -22,12 +22,13 @@ class Settings(BaseSettings):
     --------
     - Bot           Telegram credentials and targeting
     - APIs          Third-party API keys
-    - Supabase      Cloud database (prepared for Sprint 4)
+    - Supabase      Cloud database (Sprint 4)
     - Database      Local SQLite path
     - Logging       Log level
     - Timing        Scan and heartbeat intervals (seconds)
     - Discovery     Filters applied during token discovery
     - Features      Feature flags controlling which integrations are active
+    - Maintenance   Sprint 4 DB maintenance and backup settings
     """
 
     model_config = SettingsConfigDict(
@@ -168,50 +169,6 @@ class Settings(BaseSettings):
         description="Enable Supabase synchronisation (Sprint 4).",
     )
 
-    # ── Derived helpers ──────────────────────────────────────────────────
-    @field_validator("log_level", mode="before")
-    @classmethod
-    def normalise_log_level(cls, value: str) -> str:
-        """Ensure log level is always uppercased."""
-        return value.upper()
-
-    @property
-    def authorized_user_ids(self) -> list[int]:
-        """Return authorised Telegram user IDs as a list of integers.
-
-        Accepts comma- or whitespace-separated lists and silently ignores
-        any non-numeric tokens so stray text in the env var never crashes
-        startup (e.g. "123456 789012 # main account").
-
-        Only tokens that match the exact pattern ``-?\\d+`` are accepted,
-        which means ``--1`` or ``abc`` are silently discarded while valid
-        negative IDs such as ``-100123456`` (channel IDs) are kept.
-        """
-        tokens = re.split(r"[\s,]+", self.authorized_users.strip())
-        return [int(t) for t in tokens if re.fullmatch(r"-?\d+", t)]
-
-    @property
-    def blacklisted_token_set(self) -> frozenset[str]:
-        """Return blacklisted token mints as a frozenset for O(1) lookup."""
-        tokens = re.split(r"[\s,]+", self.blacklisted_tokens.strip())
-        return frozenset(t for t in tokens if t)
-
-    @property
-    def blacklisted_developer_set(self) -> frozenset[str]:
-        """Return blacklisted developer addresses as a frozenset."""
-        tokens = re.split(r"[\s,]+", self.blacklisted_developers.strip())
-        return frozenset(t for t in tokens if t)
-
-    @property
-    def bot_configured(self) -> bool:
-        """True when a bot token has been supplied."""
-        return bool(self.bot_token.strip())
-
-    @property
-    def helius_configured(self) -> bool:
-        """True when a Helius API key has been supplied."""
-        return bool(self.helius_api_key.strip())
-
     # ── Sprint 3: Alert thresholds ────────────────────────────────────────
     min_alert_score: float = Field(
         default=65.0,
@@ -291,6 +248,70 @@ class Settings(BaseSettings):
         ge=0.0,
         description="Weight for the Social scoring engine.",
     )
+
+    # ── Sprint 4: Maintenance ─────────────────────────────────────────────
+    enable_maintenance: bool = Field(
+        default=True,
+        description="Enable the periodic DB maintenance job (cleanup + cache eviction).",
+    )
+    maintenance_interval: int = Field(
+        default=3600,
+        ge=60,
+        description="How often (seconds) routine maintenance runs (cache eviction + old record cleanup).",
+    )
+    vacuum_interval: int = Field(
+        default=86400,
+        ge=3600,
+        description="How often (seconds) SQLite VACUUM and integrity check runs.",
+    )
+    db_retention_days: int = Field(
+        default=7,
+        ge=1,
+        description="Number of days to retain high-volume records (history, evaluations, logs).",
+    )
+    enable_db_backup: bool = Field(
+        default=False,
+        description="Enable automatic SQLite file backups on each VACUUM cycle.",
+    )
+    backup_dir: str = Field(
+        default="backups",
+        description="Directory where automatic DB backups are stored.",
+    )
+
+    # ── Derived helpers ──────────────────────────────────────────────────
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def normalise_log_level(cls, value: str) -> str:
+        """Ensure log level is always uppercased."""
+        return value.upper()
+
+    @property
+    def authorized_user_ids(self) -> list[int]:
+        """Return authorised Telegram user IDs as a list of integers."""
+        tokens = re.split(r"[\s,]+", self.authorized_users.strip())
+        return [int(t) for t in tokens if re.fullmatch(r"-?\d+", t)]
+
+    @property
+    def blacklisted_token_set(self) -> frozenset[str]:
+        """Return blacklisted token mints as a frozenset for O(1) lookup."""
+        tokens = re.split(r"[\s,]+", self.blacklisted_tokens.strip())
+        return frozenset(t for t in tokens if t)
+
+    @property
+    def blacklisted_developer_set(self) -> frozenset[str]:
+        """Return blacklisted developer addresses as a frozenset."""
+        tokens = re.split(r"[\s,]+", self.blacklisted_developers.strip())
+        return frozenset(t for t in tokens if t)
+
+    @property
+    def bot_configured(self) -> bool:
+        """True when a bot token has been supplied."""
+        return bool(self.bot_token.strip())
+
+    @property
+    def helius_configured(self) -> bool:
+        """True when a Helius API key has been supplied."""
+        return bool(self.helius_api_key.strip())
 
     @property
     def supabase_configured(self) -> bool:

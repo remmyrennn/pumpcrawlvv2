@@ -62,8 +62,8 @@ memecrawler/
 
 - **Sprint 1 (done)**: Foundation — FastAPI, logger, HTTP client, SQLite, providers (framework), Telegram bot (/start /help /ping /version /stats), scheduler, heartbeat, cache, Supabase stub.
 - **Sprint 2 (done)**: Provider data fetch, token scanner, watchlist management, alert dispatch.
-- **Sprint 3**: Multi-signal conviction scoring, risk evaluation, alert thresholds.
-- **Sprint 4**: Supabase sync, export, cloud backup.
+- **Sprint 3 (done)**: Multi-signal conviction scoring, risk evaluation, alert thresholds, leaderboard, milestones.
+- **Sprint 4 (done)**: Production hardening — maintenance manager, VACUUM, cleanup, backup, memory monitoring, psutil, /health /providers /runtime /database /cache Telegram commands, Render deploy config (render.yaml), expanded /health API endpoint.
 
 ## Required Secrets
 

@@ -1,4 +1,4 @@
 """MemeCrawler — Solana memecoin research engine."""
 
-__version__ = "3.0.0"
-__sprint__ = 3
+__version__ = "4.0.0"
+__sprint__ = 4

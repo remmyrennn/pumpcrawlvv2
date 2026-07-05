@@ -6,7 +6,8 @@ must implement :class:`BaseProvider`. The :class:`ProviderManager` depends
 only on this interface, ensuring that providers are interchangeable and
 testable in isolation.
 
-Sprint 2 adds: latency tracking, last_success_at, last_failure_at.
+Sprint 2: latency tracking, last_success_at, last_failure_at.
+Sprint 4: success_rate, total_successes counter, improved diagnostics.
 """
 
 from __future__ import annotations
@@ -58,9 +59,10 @@ class BaseProvider(ABC):
         self._client = http_client
         self._status: ProviderStatus = ProviderStatus.UNKNOWN
         self._error_count: int = 0
+        self._total_successes: int = 0
         self._last_success_at: Optional[str] = None
         self._last_failure_at: Optional[str] = None
-        self._latency_ms: Optional[float] = None   # most recent request latency
+        self._latency_ms: Optional[float] = None
         self._total_requests: int = 0
         self._logger = logging.getLogger(f"{__name__}.{self.name}")
 
@@ -80,6 +82,17 @@ class BaseProvider(ABC):
     def is_healthy(self) -> bool:
         """True when the provider is reporting HEALTHY status."""
         return self._status is ProviderStatus.HEALTHY
+
+    @property
+    def success_rate(self) -> Optional[float]:
+        """
+        Success rate as a percentage (0–100), or None when no requests made.
+
+        Calculated as total_successes / total_requests * 100.
+        """
+        if self._total_requests == 0:
+            return None
+        return round(self._total_successes / self._total_requests * 100, 1)
 
     # ── Abstract interface ─────────────────────────────────────────────────
 
@@ -105,6 +118,7 @@ class BaseProvider(ABC):
         from app.utils.time_utils import utcnow_iso
         self._status = ProviderStatus.HEALTHY
         self._error_count = 0
+        self._total_successes += 1
         self._last_success_at = utcnow_iso()
         self._total_requests += 1
         if latency_ms is not None:
@@ -133,13 +147,6 @@ class BaseProvider(ABC):
         else:
             self._status = ProviderStatus.DEGRADED
 
-    def _timed_get(self, url: str, **kwargs: Any):
-        """
-        Convenience context manager placeholder — callers measure latency themselves.
-
-        Providers should measure round-trip time and pass it to ``_record_success``.
-        """
-
     # ── Info ───────────────────────────────────────────────────────────────
 
     def info(self) -> dict[str, Any]:
@@ -151,7 +158,7 @@ class BaseProvider(ABC):
         dict
             Keys: ``name``, ``version``, ``status``, ``error_count``,
             ``last_success_at``, ``last_failure_at``, ``latency_ms``,
-            ``total_requests``.
+            ``total_requests``, ``total_successes``, ``success_rate``.
         """
         return {
             "name": self.name,
@@ -162,6 +169,8 @@ class BaseProvider(ABC):
             "last_failure_at": self._last_failure_at,
             "latency_ms": round(self._latency_ms, 1) if self._latency_ms is not None else None,
             "total_requests": self._total_requests,
+            "total_successes": self._total_successes,
+            "success_rate": self.success_rate,
         }
 
     def __repr__(self) -> str:

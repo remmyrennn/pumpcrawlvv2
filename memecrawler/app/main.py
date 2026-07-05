@@ -20,16 +20,19 @@ Startup sequence (enforced in :func:`lifespan`)
     11d. AlertEngine
     11e. MilestoneTracker
     11f. Inject into TokenScanner
-12. Initialise Heartbeat (real status messages in Sprint 3)
-13. Initialise Scheduler + register jobs
-14. Start FastAPI (uvicorn does this externally)
+12. Initialise Heartbeat
+13. Initialise Sprint 4 Maintenance Manager
+14. Initialise Sprint 4 Supabase client (interface, sync deferred)
+15. Initialise Scheduler + register jobs
+16. Start FastAPI (uvicorn does this externally)
 
 Shutdown sequence
 -----------------
 1. Stop Scheduler
 2. Stop Telegram bot
-3. Close HTTP client
-4. Close SQLite
+3. Disconnect Supabase
+4. Close HTTP client
+5. Close SQLite
 """
 
 from __future__ import annotations
@@ -55,6 +58,7 @@ from app.discovery.engine import DiscoveryEngine
 from app.heartbeat.heartbeat import Heartbeat
 from app.http_client import close_http_client, create_http_client
 from app.logger import setup_logging
+from app.maintenance.manager import MaintenanceManager
 from app.providers.dexscreener import DexScreenerProvider
 from app.providers.helius import HeliusProvider
 from app.providers.manager import ProviderManager
@@ -64,6 +68,7 @@ from app.providers.rugcheck import RugCheckProvider
 from app.scanner.scheduler import Scheduler
 from app.scanner.token_scanner import TokenScanner
 from app.scanner.watchlist import WatchlistManager
+from app.supabase.client import SupabaseClient
 from app.telegram.bot import TelegramBot
 from app.utils.errors import TelegramNotConfiguredError
 from app.utils.time_utils import utcnow_iso
@@ -83,6 +88,8 @@ _ranking: RankingEngine | None = None
 _alert_engine: AlertEngine | None = None
 _milestone: MilestoneTracker | None = None
 _market_mode: MarketModeDetector | None = None
+_maintenance: MaintenanceManager | None = None
+_supabase: SupabaseClient | None = None
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +107,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     """
     global _db, _provider_manager, _telegram_bot, _scheduler, _cache
     global _watchlist, _scanner, _scorer, _ranking, _alert_engine
-    global _milestone, _market_mode
+    global _milestone, _market_mode, _maintenance, _supabase
 
     # 1. Logger
     settings = get_settings()
@@ -234,7 +241,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         )
         logger.info("Sprint 3 intelligence layer initialised.")
 
-        # 12. Heartbeat (full implementation in Sprint 3)
+        # 12. Heartbeat
         heartbeat = Heartbeat(
             interval_seconds=settings.heartbeat_interval,
             enabled=settings.enable_heartbeat,
@@ -248,7 +255,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
             start_time=_start_time,
         )
 
-        # 10 (continued): Complete Telegram setup with all Sprint 3 singletons
+        # 10 (continued): Complete Telegram setup with all Sprint 3 + 4 singletons
         if _telegram_bot is not None:
             try:
                 _telegram_bot.set_runtime_context(
@@ -259,6 +266,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                     ranking_engine=_ranking,
                     market_mode_detector=_market_mode,
                     heartbeat=heartbeat,
+                    cache=_cache,
+                    start_time=_start_time,
                 )
                 await _telegram_bot.start()
             except Exception as exc:
@@ -266,7 +275,37 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                 _telegram_bot = None
         application.state.telegram_bot = _telegram_bot
 
-        # 13. Scheduler
+        # 13. Sprint 4: Maintenance Manager
+        _maintenance = MaintenanceManager(
+            db=_db,
+            cache=_cache,
+            settings=settings,
+        )
+        application.state.maintenance = _maintenance
+        logger.info("Sprint 4 maintenance manager initialised.")
+
+        # 14. Sprint 4: Supabase client (interface wired; sync deferred)
+        _supabase = None
+        if settings.enable_supabase_sync:
+            if settings.supabase_configured:
+                try:
+                    _supabase = SupabaseClient(
+                        url=settings.supabase_url,
+                        key=settings.supabase_key,
+                    )
+                    await _supabase.connect()
+                    application.state.supabase = _supabase
+                    logger.info("Supabase client initialised (sync deferred).")
+                except Exception as exc:
+                    logger.warning("Supabase init failed: %s", exc)
+                    _supabase = None
+            else:
+                logger.warning(
+                    "ENABLE_SUPABASE_SYNC is True but SUPABASE_URL/SUPABASE_KEY "
+                    "are not set — skipping Supabase."
+                )
+
+        # 15. Scheduler
         _scheduler = Scheduler()
         heartbeat.register_with_scheduler(_scheduler)
 
@@ -282,10 +321,32 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                 "Token scanner registered (interval=%ds).", settings.scan_interval
             )
 
+        # Sprint 4: Maintenance scheduler jobs
+        if settings.enable_maintenance:
+            _scheduler.register(
+                name="db_maintenance",
+                func=_maintenance.run_maintenance,
+                interval_seconds=settings.maintenance_interval,
+                run_immediately=False,
+                enabled=True,
+            )
+            _scheduler.register(
+                name="db_vacuum",
+                func=_maintenance.run_vacuum,
+                interval_seconds=settings.vacuum_interval,
+                run_immediately=False,
+                enabled=True,
+            )
+            logger.info(
+                "Maintenance jobs registered (cleanup=%ds, vacuum=%ds).",
+                settings.maintenance_interval,
+                settings.vacuum_interval,
+            )
+
         await _scheduler.start()
         application.state.scheduler = _scheduler
 
-        logger.info("MemeCrawler fully started. API is ready.")
+        logger.info("MemeCrawler v%s fully started. API is ready.", app_module.__version__)
 
     except Exception as exc:
         logger.critical(
@@ -294,6 +355,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         for label, coro in [
             ("scheduler",   _scheduler.stop() if _scheduler else None),
             ("telegram",    _telegram_bot.stop() if _telegram_bot else None),
+            ("supabase",    _supabase.disconnect() if _supabase else None),
             ("http_client", close_http_client()),
             ("database",    _db.close() if _db else None),
         ]:
@@ -316,6 +378,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     for label, coro in [
         ("scheduler",   _scheduler.stop() if _scheduler else None),
         ("telegram",    _telegram_bot.stop() if _telegram_bot else None),
+        ("supabase",    _supabase.disconnect() if _supabase else None),
         ("http_client", close_http_client()),
         ("database",    _db.close() if _db else None),
     ]:
@@ -373,28 +436,71 @@ def create_app() -> FastAPI:
         scanner_info = _scanner.info() if _scanner else {}
         market_info = _market_mode.info() if _market_mode else {}
         ranking_info = _ranking.info() if _ranking else {}
+        maintenance_info = _maintenance.info() if _maintenance else {}
+        supabase_info = _supabase.info() if _supabase else {"connected": False}
+
+        # Optional: memory usage via psutil (graceful degradation if absent)
+        memory_mb: float | None = None
+        try:
+            import psutil
+            proc = psutil.Process()
+            memory_mb = round(proc.memory_info().rss / 1_048_576, 1)
+        except Exception:
+            pass
+
+        # Token counts — fast queries; wrapped to stay non-blocking
+        watched_tokens = 0
+        tracked_tokens = 0
+        alerts_today = 0
+        if _db and _db.is_connected:
+            try:
+                row = await _db.fetchone(
+                    "SELECT COUNT(*) AS cnt FROM watchlist "
+                    "WHERE state NOT IN ('ARCHIVED', 'TRACKING');"
+                )
+                watched_tokens = row["cnt"] if row else 0
+
+                row2 = await _db.fetchone(
+                    "SELECT COUNT(*) AS cnt FROM watchlist WHERE state = 'TRACKING';"
+                )
+                tracked_tokens = row2["cnt"] if row2 else 0
+
+                row3 = await _db.fetchone(
+                    "SELECT COUNT(*) AS cnt FROM alerts "
+                    "WHERE date(sent_at) = date('now');"
+                )
+                alerts_today = row3["cnt"] if row3 else 0
+            except Exception:
+                pass
 
         overall_status = "healthy"
         if not db_health.get("connected"):
             overall_status = "degraded"
 
-        return JSONResponse(
-            content={
-                "status": overall_status,
-                "uptime_seconds": round(time.time() - _start_time, 1),
-                "version": app_module.__version__,
-                "sprint": app_module.__sprint__,
-                "timestamp": utcnow_iso(),
-                "database": db_health,
-                "telegram": telegram_info,
-                "providers": provider_info,
-                "scheduler": scheduler_info,
-                "cache": cache_info,
-                "scanner": scanner_info,
-                "market_mode": market_info,
-                "ranking": ranking_info,
-            }
-        )
+        payload: dict = {
+            "status": overall_status,
+            "uptime_seconds": round(time.time() - _start_time, 1),
+            "version": app_module.__version__,
+            "sprint": app_module.__sprint__,
+            "timestamp": utcnow_iso(),
+            "database": db_health,
+            "telegram": telegram_info,
+            "providers": provider_info,
+            "scheduler": scheduler_info,
+            "cache": cache_info,
+            "scanner": scanner_info,
+            "market_mode": market_info,
+            "ranking": ranking_info,
+            "maintenance": maintenance_info,
+            "supabase": supabase_info,
+            "watched_tokens": watched_tokens,
+            "tracked_tokens": tracked_tokens,
+            "alerts_today": alerts_today,
+        }
+        if memory_mb is not None:
+            payload["memory_mb"] = memory_mb
+
+        return JSONResponse(content=payload)
 
     return application
 

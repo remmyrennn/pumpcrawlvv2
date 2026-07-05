@@ -8,6 +8,7 @@ Sprint 1 commands: /start, /help, /ping, /version, /stats
 Sprint 2 commands: /watch, /diagnostics  (+ live /stats data)
 Sprint 3 commands: /watchlist, /token, /leaderboard, /heartbeat,
                    /marketmode, /editfilters
+Sprint 4 commands: /health, /providers, /runtime, /database, /cache
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from app.utils.errors import TelegramNotConfiguredError
 if TYPE_CHECKING:
     from app.analysis.market_mode import MarketModeDetector
     from app.analysis.ranking import RankingEngine
+    from app.cache.manager import CacheManager
     from app.database.manager import DatabaseManager
     from app.heartbeat.heartbeat import Heartbeat
     from app.providers.manager import ProviderManager
@@ -77,6 +79,9 @@ class TelegramBot:
         self._ranking_engine: Optional["RankingEngine"] = None
         self._market_mode_detector: Optional["MarketModeDetector"] = None
         self._heartbeat: Optional["Heartbeat"] = None
+        # Sprint 4
+        self._cache: Optional["CacheManager"] = None
+        self._start_time: Optional[float] = None
 
     # ── Dependency injection ──────────────────────────────────────────────
 
@@ -90,6 +95,8 @@ class TelegramBot:
         ranking_engine: Optional["RankingEngine"] = None,
         market_mode_detector: Optional["MarketModeDetector"] = None,
         heartbeat: Optional["Heartbeat"] = None,
+        cache: Optional["CacheManager"] = None,
+        start_time: Optional[float] = None,
     ) -> None:
         """
         Inject runtime singletons after construction.
@@ -103,6 +110,8 @@ class TelegramBot:
         self._ranking_engine = ranking_engine
         self._market_mode_detector = market_mode_detector
         self._heartbeat = heartbeat
+        self._cache = cache
+        self._start_time = start_time
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -133,6 +142,8 @@ class TelegramBot:
             ranking_engine=self._ranking_engine,
             market_mode_detector=self._market_mode_detector,
             heartbeat=self._heartbeat,
+            cache=self._cache,
+            start_time=self._start_time,
         )
 
         await self._app.initialize()
