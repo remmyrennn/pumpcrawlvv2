@@ -90,11 +90,13 @@ class AlertEngine:
         if not evaluation.eligible_for_alert:
             return False
 
-        # Check + insert in one cursor scope (atomic on single-connection SQLite)
-        dispatched = await self._try_insert_alert(
+        # Check + insert in one cursor scope (atomic on single-connection SQLite).
+        # _try_insert_alert now returns the built message on success (or None on
+        # duplicate) so we avoid calling _build_alert_message twice.
+        message = await self._try_insert_alert(
             evaluation, symbol, name, current_price_usd
         )
-        if not dispatched:
+        if message is None:
             logger.debug(
                 "Alert skipped for %s — duplicate detected.", evaluation.mint[:12]
             )
@@ -122,8 +124,7 @@ class AlertEngine:
                 exc,
             )
 
-        # Send the Telegram message
-        message = _build_alert_message(evaluation, symbol, name)
+        # Send the already-built Telegram message
         await self._send(message)
         self._alerts_sent += 1
 
@@ -144,14 +145,16 @@ class AlertEngine:
         symbol: str,
         name: str,
         current_price_usd: Optional[float] = None,
-    ) -> bool:
+    ) -> Optional[str]:
         """
         Atomically check for duplicates and insert.
 
         Also seeds the outcomes row with the alert-time entry price so that
         MilestoneTracker can compute accurate gain percentages from day one.
 
-        Returns True when the alert was inserted (i.e. not a duplicate).
+        Returns the built alert message string on success, or None when this
+        alert is a duplicate (already exists in the DB).  Building the message
+        once here avoids a second redundant call in ``maybe_alert``.
         """
         now = utcnow_iso()
         metadata = json.dumps({
@@ -170,9 +173,11 @@ class AlertEngine:
             )
             existing = await cur.fetchone()
             if existing:
-                return False
+                return None
 
-            # Insert alert record
+            # Build the message once and reuse it for both the DB record and
+            # the Telegram send — previously it was built a second time in
+            # maybe_alert which wasted CPU and risked divergence.
             msg = _build_alert_message(ev, symbol, name)
             await cur.execute(
                 """
@@ -213,7 +218,7 @@ class AlertEngine:
                 (now, ev.mint),
             )
 
-        return True
+        return msg
 
     async def _get_state(self, mint: str) -> Optional[TokenState]:
         row = await self._db.fetchone(

@@ -480,13 +480,31 @@ async def _cmd_leaderboard(
         )
         return
 
+    sort_label = {
+        "conviction": "Conviction Score",
+        "confidence": "Confidence",
+        "improvement": "Score Improvement",
+    }[sort_key]
+
     try:
-        rows = await db.fetchall(
-            "SELECT * FROM rankings ORDER BY score DESC LIMIT 10;"
-        )
+        if ranking_engine is not None:
+            if sort_key == "improvement":
+                rows = await ranking_engine.get_improvement_top(n=10)
+            else:
+                rows = await ranking_engine.get_top(n=10, rank_type=sort_key)
+        else:
+            # Fallback: hit DB directly with the correct ORDER BY for sort_key
+            if sort_key == "confidence":
+                order_clause = "confidence DESC, score DESC"
+            else:
+                order_clause = "score DESC, confidence DESC"
+            raw = await db.fetchall(
+                f"SELECT * FROM rankings ORDER BY {order_clause} LIMIT 10;"
+            )
+            rows = [dict(r) for r in raw]
     except Exception as exc:
-        logger.error("_cmd_leaderboard: DB error: %s", exc)
-        await update.message.reply_text("❌ Database error.")
+        logger.error("_cmd_leaderboard: fetch error: %s", exc)
+        await update.message.reply_text("❌ Failed to load leaderboard.")
         return
 
     if not rows:
@@ -497,17 +515,20 @@ async def _cmd_leaderboard(
         )
         return
 
-    sort_label = {"conviction": "Conviction Score", "confidence": "Confidence", "improvement": "Improvement"}[sort_key]
     lines = [f"🏆 <b>Leaderboard — Top {len(rows)} by {sort_label}</b>\n"]
 
     for i, row in enumerate(rows, start=1):
-        sym = row["symbol"] or "?"
-        score = row["score"]
-        conf = row["confidence"]
-        risk = row["risk_level"]
+        sym = row.get("symbol") or "?"
+        score = float(row.get("latest_score") or row.get("score") or 0)
+        conf = float(row.get("confidence") or 0)
+        risk = row.get("risk_level") or "UNKNOWN"
         risk_icon = {"LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🟠", "CRITICAL": "🔴"}.get(risk, "⚪")
+        extra = ""
+        if sort_key == "improvement":
+            imp = float(row.get("improvement") or 0)
+            extra = f"  Δ{imp:+.0f}"
         lines.append(
-            f"#{i} {risk_icon} <b>{sym}</b>  Score:{score:.0f}  Conf:{conf:.0f}%  Risk:{risk}"
+            f"#{i} {risk_icon} <b>{sym}</b>  Score:{score:.0f}  Conf:{conf:.0f}%{extra}"
         )
 
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")

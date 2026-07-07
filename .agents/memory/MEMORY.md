@@ -1,0 +1,1 @@
+- [MemeCrawler Sprint 5 fixes](memecrawler-sprint5.md) — 10 bugs fixed + Helius/Supabase wired; credentials hardcoded in settings.py.

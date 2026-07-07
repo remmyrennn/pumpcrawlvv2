@@ -576,7 +576,13 @@ class DatabaseManager:
 
     async def backup(self, backup_dir: str = "backups") -> str | None:
         """
-        Copy the SQLite database file to a timestamped backup.
+        Create a consistent backup of the SQLite database using the SQLite
+        online-backup API.
+
+        Using ``sqlite3.connect().backup()`` is safe on a WAL-mode database
+        because it snapshots a consistent state even while writes are in
+        flight.  The old ``shutil.copy2`` approach could produce a corrupt
+        backup when WAL frames had not yet been folded back into the main file.
 
         Parameters
         ----------
@@ -589,7 +595,7 @@ class DatabaseManager:
             The path of the created backup file, or ``None`` on failure.
         """
         import os
-        import shutil
+        import sqlite3
 
         from app.utils.time_utils import utcnow
 
@@ -597,16 +603,29 @@ class DatabaseManager:
             logger.warning("Backup skipped — database not connected.")
             return None
 
-        if not os.path.exists(self.path):
-            logger.warning("Backup skipped — DB file not found at %s.", self.path)
-            return None
-
         try:
             os.makedirs(backup_dir, exist_ok=True)
             ts = utcnow().strftime("%Y%m%d_%H%M%S")
             backup_name = f"memecrawler_{ts}.db"
             backup_path = os.path.join(backup_dir, backup_name)
-            shutil.copy2(self.path, backup_path)
+
+            # Checkpoint WAL into the main file before copying so the backup
+            # contains all committed transactions.
+            assert self._conn is not None
+            await self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+
+            # Use the sqlite3 backup API for a guaranteed-consistent snapshot.
+            # This runs in a thread executor to avoid blocking the event loop.
+            src_path = self.path
+
+            def _do_backup() -> None:
+                with sqlite3.connect(src_path) as src:
+                    with sqlite3.connect(backup_path) as dst:
+                        src.backup(dst)
+
+            import asyncio
+            await asyncio.get_event_loop().run_in_executor(None, _do_backup)
+
             logger.info("Database backed up to %s.", backup_path)
             return backup_path
         except Exception as exc:

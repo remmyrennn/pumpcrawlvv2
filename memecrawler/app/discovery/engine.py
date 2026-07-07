@@ -22,6 +22,7 @@ from app.utils.validation import is_valid_token_mint
 
 if TYPE_CHECKING:
     from app.providers.dexscreener import DexScreenerProvider
+    from app.providers.helius import HeliusProvider
     from app.providers.pumpfun import PumpFunProvider
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ class DiscoveryEngine:
         self,
         dexscreener: "DexScreenerProvider | None" = None,
         pumpfun: "PumpFunProvider | None" = None,
+        helius: "HeliusProvider | None" = None,
         *,
         min_liquidity_usd: float = 500.0,
         blacklisted_tokens: frozenset[str] = frozenset(),
@@ -61,6 +63,7 @@ class DiscoveryEngine:
     ) -> None:
         self._dexscreener = dexscreener
         self._pumpfun = pumpfun
+        self._helius = helius
         self._min_liquidity = min_liquidity_usd
         self._blacklisted_tokens = blacklisted_tokens
         self._blacklisted_developers = blacklisted_developers
@@ -98,6 +101,10 @@ class DiscoveryEngine:
         if self._pumpfun is not None:
             tasks.append(asyncio.create_task(
                 self._fetch_pumpfun(), name="discovery:pumpfun"
+            ))
+        if self._helius is not None:
+            tasks.append(asyncio.create_task(
+                self._fetch_helius(), name="discovery:helius"
             ))
 
         if not tasks:
@@ -152,6 +159,16 @@ class DiscoveryEngine:
             return await self._pumpfun.get_new_coins(limit=self._limit)
         except Exception as exc:
             logger.error("Pump.fun discovery fetch error: %s", exc)
+            return []
+
+    async def _fetch_helius(self) -> list[TokenData]:
+        """Fetch recently created tokens from Helius. Never raises."""
+        if self._helius is None:
+            return []
+        try:
+            return await self._helius.get_new_tokens(limit=self._limit)
+        except Exception as exc:
+            logger.error("Helius discovery fetch error: %s", exc)
             return []
 
     # ── Deduplication ──────────────────────────────────────────────────────
@@ -224,13 +241,25 @@ class DiscoveryEngine:
             return f"wrong chain: {token.chain}"
         if token.mint in self._blacklisted_tokens:
             return "blacklisted token"
+        # Enforce developer wallet blacklist when token carries creator info.
+        if (
+            self._blacklisted_developers
+            and getattr(token, "creator", None) in self._blacklisted_developers
+        ):
+            return "blacklisted developer"
         # Only apply liquidity filter when the data is present.
         # Tokens fetched from profile endpoints lack liquidity data;
         # it will be populated when the full token scan runs.
+        # Read the runtime override for min_liquidity_usd so /editfilters
+        # changes are respected without restarting the bot.
+        from app.config.settings import get_runtime_override
+        effective_min_liquidity = float(
+            get_runtime_override("min_liquidity_usd") or self._min_liquidity
+        )
         if (
             token.liquidity_usd is not None
-            and self._min_liquidity > 0
-            and token.liquidity_usd < self._min_liquidity
+            and effective_min_liquidity > 0
+            and token.liquidity_usd < effective_min_liquidity
         ):
             return f"liquidity too low: ${token.liquidity_usd:.0f}"
         return None
@@ -239,13 +268,16 @@ class DiscoveryEngine:
 
     def info(self) -> dict[str, object]:
         """Return diagnostic stats for the /diagnostics endpoint."""
+        providers = []
+        if self._dexscreener is not None:
+            providers.append("dexscreener")
+        if self._pumpfun is not None:
+            providers.append("pumpfun")
+        if self._helius is not None:
+            providers.append("helius")
         return {
             "cycles": self._cycles,
             "total_discovered": self._total_discovered,
             "total_rejected": self._total_rejected,
-            "providers": [
-                p for p in ["dexscreener", "pumpfun"]
-                if getattr(self, f"_{'dexscreener' if p == 'dexscreener' else 'pumpfun'}")
-                is not None
-            ],
+            "providers": providers,
         }

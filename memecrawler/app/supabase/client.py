@@ -1,31 +1,36 @@
 """
-Supabase client — Sprint 4 interface.
+Supabase client — real synchronisation implementation.
 
-This module defines the full planned API surface for cloud database
-synchronisation. The synchronisation logic itself is intentionally deferred
-(all methods are no-ops) until Supabase credentials are confirmed and
-schema design is finalised.
+Syncs local SQLite data (watchlist, alerts, tokens) to the Supabase
+cloud database using incremental watermarks so only changed rows are
+pushed on each cycle.
 
-Sprint 4 delivers:
-- Complete interface with watermark tracking (last_synced_at per table).
-- Connection lifecycle (connect / disconnect) wired into the startup sequence.
-- Status reported in /health and via the /providers Telegram command.
-- Ready for real implementation: replace each no-op with supabase-py calls.
-
-When to implement the real sync:
-- Supabase project created, service key available in SUPABASE_KEY env var.
-- Remote schema matches local SQLite tables (tokens, watchlist, alerts).
-- ENABLE_SUPABASE_SYNC=true in environment.
+Requires: SUPABASE_URL and SUPABASE_KEY in settings.py (already set).
+The remote Supabase schema must have the three tables defined below.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
 from app.utils.time_utils import utcnow_iso
 
+if TYPE_CHECKING:
+    from app.database.manager import DatabaseManager
+
 logger = logging.getLogger(__name__)
+
+# ── Remote table names ────────────────────────────────────────────────────────
+# These must match the table names you have created (or will create) in your
+# Supabase project.  Each mirrors the local SQLite table structure.
+
+_TABLE_TOKENS    = "tokens"
+_TABLE_WATCHLIST = "watchlist"
+_TABLE_ALERTS    = "alerts"
+
+# Maximum rows sent per batch to avoid exceeding Supabase request limits.
+_BATCH_SIZE = 100
 
 
 class SupabaseClient:
@@ -37,98 +42,190 @@ class SupabaseClient:
     url:
         Supabase project URL (e.g. ``https://xyzcompany.supabase.co``).
     key:
-        Supabase service role key (never the anon key in backend services).
-
-    Notes
-    -----
-    All sync methods are no-ops until credentials are confirmed and
-    ``connect()`` successfully establishes a connection. Callers must check
-    ``is_connected`` before calling sync methods if they need guarantees.
+        Supabase anon or service role key.
+    db:
+        Open DatabaseManager instance used to read local data.
+        Required for sync operations; set via :meth:`set_db`.
     """
 
     def __init__(self, url: str, key: str) -> None:
         self._url = url
-        # Key is stored but never logged or exposed in info().
         self._key = key
+        self._db: Optional["DatabaseManager"] = None
+        self._client: Any = None
         self._connected: bool = False
         self._connect_error: Optional[str] = None
         self._syncs_attempted: int = 0
         self._syncs_succeeded: int = 0
-        # Per-table watermarks for incremental sync.
+        # Per-table watermarks for incremental sync — ISO 8601 timestamps.
         self._last_synced: dict[str, Optional[str]] = {
-            "tokens": None,
-            "alerts": None,
-            "watchlist": None,
+            _TABLE_TOKENS:    None,
+            _TABLE_ALERTS:    None,
+            _TABLE_WATCHLIST: None,
         }
+
+    def set_db(self, db: "DatabaseManager") -> None:
+        """Inject the database manager (called from main.py after construction)."""
+        self._db = db
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
     async def connect(self) -> None:
         """
-        Establish a connection to Supabase.
-
-        Sprint 4: no-op interface — real implementation replaces this with
-        supabase-py client initialisation and a ping to verify credentials.
-
-        When implemented, this should:
-        1. Import supabase-py and create a ``AsyncClient``.
-        2. Call a lightweight health query to confirm connectivity.
-        3. Set ``self._connected = True`` on success.
+        Create the Supabase async client and verify connectivity with a
+        lightweight read against the watchlist table.
         """
-        logger.info(
-            "SupabaseClient: connect() called — interface ready, sync deferred. "
-            "Set ENABLE_SUPABASE_SYNC=true and provide SUPABASE_URL + SUPABASE_KEY "
-            "to activate real synchronisation."
-        )
-        # Do NOT set _connected = True here — the interface is not yet live.
-        self._connected = False
+        try:
+            from supabase import create_async_client
+            self._client = await create_async_client(self._url, self._key)
+            # Minimal ping: fetch 1 row from watchlist (safe even if table is empty)
+            await self._client.table(_TABLE_WATCHLIST).select("mint").limit(1).execute()
+            self._connected = True
+            logger.info("Supabase: connected to %s…", self._url[:40])
+        except Exception as exc:
+            self._connected = False
+            self._connect_error = str(exc)
+            logger.warning("Supabase: connection failed — %s", exc)
 
     async def disconnect(self) -> None:
         """Close the Supabase connection gracefully."""
         if self._connected:
-            logger.info("SupabaseClient: disconnecting.")
+            try:
+                if hasattr(self._client, "auth") and hasattr(self._client.auth, "close"):
+                    await self._client.auth.close()
+            except Exception:
+                pass
             self._connected = False
+            logger.info("Supabase: disconnected.")
         else:
-            logger.debug("SupabaseClient: disconnect() called — was not connected.")
+            logger.debug("Supabase: disconnect() called — was not connected.")
 
-    # ── Sync operations (no-op stubs) ────────────────────────────────────
+    # ── Sync operations ────────────────────────────────────────────────────
 
     async def sync_tokens(self) -> None:
         """
-        Upsert all token rows modified since ``last_synced["tokens"]``.
+        Upsert all tokens modified since the last sync watermark.
 
-        Sprint 4 stub — no-op. Real implementation:
-        1. Query local SQLite for tokens updated after the watermark.
-        2. Batch-upsert to Supabase ``tokens`` table.
-        3. Update ``_last_synced["tokens"]`` on success.
+        Reads from the local ``tokens`` SQLite table and batch-upserts to
+        the remote Supabase ``tokens`` table.  The ``updated_at`` column is
+        used as the incremental watermark.
         """
+        if not self._connected or self._client is None or self._db is None:
+            return
+
         self._syncs_attempted += 1
-        logger.debug("SupabaseClient: sync_tokens() — no-op (sync not yet live).")
+        watermark = self._last_synced[_TABLE_TOKENS]
+        try:
+            if watermark:
+                rows = await self._db.fetchall(
+                    "SELECT * FROM tokens WHERE updated_at > ? ORDER BY updated_at LIMIT ?;",
+                    (watermark, _BATCH_SIZE),
+                )
+            else:
+                rows = await self._db.fetchall(
+                    "SELECT * FROM tokens ORDER BY updated_at LIMIT ?;",
+                    (_BATCH_SIZE,),
+                )
+            if not rows:
+                return
+
+            batch = [_row_to_dict(r) for r in rows]
+            await self._client.table(_TABLE_TOKENS).upsert(
+                batch, on_conflict="mint"
+            ).execute()
+
+            new_watermark = batch[-1].get("updated_at")
+            if new_watermark:
+                self._last_synced[_TABLE_TOKENS] = new_watermark
+            self._syncs_succeeded += 1
+            logger.debug("Supabase: synced %d token(s).", len(batch))
+        except Exception as exc:
+            logger.warning("Supabase sync_tokens failed: %s", exc)
 
     async def sync_alerts(self) -> None:
         """
-        Replicate alert history to Supabase since the last sync watermark.
+        Replicate new alerts to Supabase since the last sync watermark.
 
-        Sprint 4 stub — no-op.
+        Uses ``sent_at`` as the watermark column.
         """
+        if not self._connected or self._client is None or self._db is None:
+            return
+
         self._syncs_attempted += 1
-        logger.debug("SupabaseClient: sync_alerts() — no-op (sync not yet live).")
+        watermark = self._last_synced[_TABLE_ALERTS]
+        try:
+            if watermark:
+                rows = await self._db.fetchall(
+                    "SELECT * FROM alerts WHERE sent_at > ? ORDER BY sent_at LIMIT ?;",
+                    (watermark, _BATCH_SIZE),
+                )
+            else:
+                rows = await self._db.fetchall(
+                    "SELECT * FROM alerts ORDER BY sent_at LIMIT ?;",
+                    (_BATCH_SIZE,),
+                )
+            if not rows:
+                return
+
+            batch = [_row_to_dict(r) for r in rows]
+            await self._client.table(_TABLE_ALERTS).upsert(
+                batch, on_conflict="id"
+            ).execute()
+
+            new_watermark = batch[-1].get("sent_at")
+            if new_watermark:
+                self._last_synced[_TABLE_ALERTS] = new_watermark
+            self._syncs_succeeded += 1
+            logger.debug("Supabase: synced %d alert(s).", len(batch))
+        except Exception as exc:
+            logger.warning("Supabase sync_alerts failed: %s", exc)
 
     async def sync_watchlist(self) -> None:
         """
         Replicate the watchlist table to Supabase.
 
-        Sprint 4 stub — no-op.
+        Uses ``last_seen_at`` as the watermark column.
         """
+        if not self._connected or self._client is None or self._db is None:
+            return
+
         self._syncs_attempted += 1
-        logger.debug("SupabaseClient: sync_watchlist() — no-op (sync not yet live).")
+        watermark = self._last_synced[_TABLE_WATCHLIST]
+        try:
+            if watermark:
+                rows = await self._db.fetchall(
+                    "SELECT * FROM watchlist WHERE last_seen_at > ? ORDER BY last_seen_at LIMIT ?;",
+                    (watermark, _BATCH_SIZE),
+                )
+            else:
+                rows = await self._db.fetchall(
+                    "SELECT * FROM watchlist ORDER BY last_seen_at LIMIT ?;",
+                    (_BATCH_SIZE,),
+                )
+            if not rows:
+                return
+
+            batch = [_row_to_dict(r) for r in rows]
+            await self._client.table(_TABLE_WATCHLIST).upsert(
+                batch, on_conflict="mint"
+            ).execute()
+
+            new_watermark = batch[-1].get("last_seen_at")
+            if new_watermark:
+                self._last_synced[_TABLE_WATCHLIST] = new_watermark
+            self._syncs_succeeded += 1
+            logger.debug("Supabase: synced %d watchlist row(s).", len(batch))
+        except Exception as exc:
+            logger.warning("Supabase sync_watchlist failed: %s", exc)
 
     async def sync_all(self) -> None:
         """
         Run all three sync operations in sequence.
 
-        Safe to call even when not connected — each sub-call is a no-op.
+        Safe to call even when not connected — each sub-call short-circuits.
         """
+        if not self._connected:
+            return
         await self.sync_tokens()
         await self.sync_alerts()
         await self.sync_watchlist()
@@ -147,20 +244,27 @@ class SupabaseClient:
         Return a status summary for the /health API endpoint.
 
         The Supabase key is never included in the output.
-
-        Returns
-        -------
-        dict
-            Keys: ``connected``, ``url`` (redacted), ``syncs_attempted``,
-            ``syncs_succeeded``, ``last_synced``.
         """
         redacted_url = (
             self._url[:30] + "..." if len(self._url) > 30 else self._url
         ) if self._url else ""
-        return {
+        result: dict[str, Any] = {
             "connected": self._connected,
             "url": redacted_url,
             "syncs_attempted": self._syncs_attempted,
             "syncs_succeeded": self._syncs_succeeded,
             "last_synced": self._last_synced,
         }
+        if self._connect_error and not self._connected:
+            result["connect_error"] = self._connect_error
+        return result
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _row_to_dict(row: Any) -> dict[str, Any]:
+    """Convert an aiosqlite.Row (or dict) to a plain dict safe for JSON."""
+    try:
+        return dict(row)
+    except Exception:
+        return {}

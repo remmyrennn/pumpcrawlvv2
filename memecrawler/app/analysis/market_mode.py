@@ -4,9 +4,7 @@ Market Mode Detector.
 Determines the aggregate market sentiment (BULL / NEUTRAL / WEAK) by
 analysing recent price and volume trends across all actively watched tokens.
 
-Thresholds are configurable via Settings (never hardcoded).
-
-Sprint 3.
+Thresholds are configurable via Settings.
 """
 
 from __future__ import annotations
@@ -23,7 +21,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Default lookback: use the last N history records per token
 _LOOKBACK_RECORDS: int = 3
 
 
@@ -46,20 +43,8 @@ class MarketModeDetector:
         self._last_updated: str = utcnow_iso()
         self._sample_size: int = 0
 
-    # ── Compute ───────────────────────────────────────────────────────────
-
     async def refresh(self) -> MarketMode:
-        """
-        Refresh the market mode by querying recent history data.
-
-        Samples all active watchlist tokens (not ARCHIVED / TRACKING),
-        computes per-token price trend, and classifies aggregate sentiment.
-
-        Returns
-        -------
-        MarketMode
-            The newly computed market mode.
-        """
+        """Refresh the market mode by querying recent history data."""
         try:
             mode = await self._compute()
         except Exception as exc:
@@ -73,7 +58,6 @@ class MarketModeDetector:
 
     async def _compute(self) -> MarketMode:
         """Core computation: sample tokens, measure trend, classify mode."""
-        # Fetch active tokens with recent history
         active_mints = await self._db.fetchall(
             """
             SELECT DISTINCT mint FROM watchlist
@@ -122,18 +106,17 @@ class MarketModeDetector:
             return MarketMode.NEUTRAL
 
         bull_ratio = positive_count / total
-        weak_ratio = (positive_count + neutral_count) / total if total else 1.0
-
+        # weak_ratio: fraction of tokens that are NOT positive.
+        # WEAK fires when fewer than weak_threshold of tokens are positive.
+        # This correctly uses bull_ratio (positive / total) for the WEAK check.
         bull_threshold = self._settings.market_mode_bull_ratio
         weak_threshold = self._settings.market_mode_weak_ratio
 
         if bull_ratio >= bull_threshold:
             return MarketMode.BULL
-        if (positive_count / total) < weak_threshold:
+        if bull_ratio < weak_threshold:
             return MarketMode.WEAK
         return MarketMode.NEUTRAL
-
-    # ── Accessors ─────────────────────────────────────────────────────────
 
     @property
     def current_mode(self) -> MarketMode:
@@ -148,8 +131,6 @@ class MarketModeDetector:
             "sample_size": self._sample_size,
         }
 
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _token_trend(hist: list[Any]) -> int:
     """

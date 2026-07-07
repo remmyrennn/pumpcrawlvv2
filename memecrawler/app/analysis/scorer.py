@@ -293,17 +293,32 @@ def _is_eligible(
     2. confidence >= min_alert_confidence
     3. scan_count >= min_alert_scans
     4. risk_level is acceptable (not HIGH or CRITICAL by default)
+
+    All numeric thresholds are read from runtime overrides first (set via
+    /editfilters), falling back to the hardcoded settings values.
     """
+    from app.config.settings import get_runtime_override
+
+    min_score = float(
+        get_runtime_override("min_alert_score") or settings.min_alert_score
+    )
+    min_confidence = float(
+        get_runtime_override("min_alert_confidence") or settings.min_alert_confidence
+    )
+    min_scans = int(
+        get_runtime_override("min_alert_scans") or settings.min_alert_scans
+    )
+
     try:
         max_risk = RiskLevel.from_string(settings.max_alert_risk)
     except Exception:
         max_risk = RiskLevel.MEDIUM
 
-    if final_score < settings.min_alert_score:
+    if final_score < min_score:
         return False
-    if confidence < settings.min_alert_confidence:
+    if confidence < min_confidence:
         return False
-    if scan_count < settings.min_alert_scans:
+    if scan_count < min_scans:
         return False
     if not risk_level.is_acceptable(max_risk):
         return False

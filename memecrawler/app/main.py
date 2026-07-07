@@ -136,6 +136,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 
         _dexscreener: DexScreenerProvider | None = None
         _pumpfun: PumpFunProvider | None = None
+        _helius_provider: HeliusProvider | None = None
         _rugcheck_provider: RugCheckProvider | None = None
 
         if settings.enable_dexscreener:
@@ -144,13 +145,12 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         if settings.enable_pumpfun:
             _pumpfun = PumpFunProvider(http_client)
             _provider_manager.register(_pumpfun)
-        if settings.enable_helius and settings.helius_configured:
-            _provider_manager.register(
-                HeliusProvider(http_client, settings.helius_api_key)
-            )
-        elif settings.enable_helius:
+        if settings.effective_enable_helius and settings.helius_configured:
+            _helius_provider = HeliusProvider(http_client, settings.helius_api_key)
+            _provider_manager.register(_helius_provider)
+        elif settings.effective_enable_helius:
             logger.warning(
-                "ENABLE_HELIUS is True but HELIUS_API_KEY is not set — skipping Helius."
+                "Helius is enabled but HELIUS_API_KEY is not set — skipping Helius."
             )
         if settings.enable_rugcheck:
             _rugcheck_provider = RugCheckProvider(http_client)
@@ -168,6 +168,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         _discovery = DiscoveryEngine(
             dexscreener=_dexscreener,
             pumpfun=_pumpfun,
+            helius=_helius_provider,
             min_liquidity_usd=settings.min_liquidity_usd,
             blacklisted_tokens=settings.blacklisted_token_set,
             blacklisted_developers=settings.blacklisted_developer_set,
@@ -294,9 +295,13 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                         url=settings.supabase_url,
                         key=settings.supabase_key,
                     )
+                    _supabase.set_db(_db)
                     await _supabase.connect()
                     application.state.supabase = _supabase
-                    logger.info("Supabase client initialised (sync deferred).")
+                    logger.info(
+                        "Supabase client initialised (connected=%s).",
+                        _supabase.is_connected,
+                    )
                 except Exception as exc:
                     logger.warning("Supabase init failed: %s", exc)
                     _supabase = None
@@ -320,6 +325,19 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
             )
             logger.info(
                 "Token scanner registered (interval=%ds).", settings.scan_interval
+            )
+
+        # Sprint 5: Supabase sync scheduler job
+        if _supabase is not None and _supabase.is_connected:
+            _scheduler.register(
+                name="supabase_sync",
+                func=_supabase.sync_all,
+                interval_seconds=settings.heartbeat_interval,
+                run_immediately=False,
+                enabled=True,
+            )
+            logger.info(
+                "Supabase sync job registered (interval=%ds).", settings.heartbeat_interval
             )
 
         # Sprint 4: Maintenance scheduler jobs

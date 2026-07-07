@@ -300,18 +300,10 @@ class TokenScanner:
             self._record_scan_time(time.monotonic() - scan_start)
             return
 
-        # ── Sprint 3: Milestone tracking for TRACKING tokens ───────────────
-        if entry.state == TokenState.TRACKING and self._milestone is not None:
-            try:
-                await self._milestone.check(
-                    mint=entry.mint,
-                    symbol=token_data.symbol or "",
-                    current=token_data,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Milestone check failed for %s: %s", entry.mint[:12], exc
-                )
+        # NOTE: TRACKING tokens are handled exclusively in _run_tracking_milestones.
+        # Running milestone checks here too was a double-fire bug.
+        # _evaluate_state already returns None for TRACKING, so skip all
+        # per-token intelligence for TRACKING tokens.
 
         # ── Priority evaluation ────────────────────────────────────────────
         new_priority = self._evaluate_priority(token_data)
@@ -439,13 +431,10 @@ class TokenScanner:
 
         # ── Ranking update ─────────────────────────────────────────────────
         if self._ranking is not None:
-            await self._ranking.update(evaluation)
-            # Sync symbol into rankings table
-            if token_data.symbol:
-                await self._db.execute(  # type: ignore[union-attr]
-                    "UPDATE rankings SET symbol = ? WHERE mint = ?",
-                    (token_data.symbol, entry.mint),
-                )
+            # Pass symbol directly so the ranking row is always written with
+            # the correct symbol — the old code called update() without symbol
+            # and patched it with a separate UPDATE (which could race).
+            await self._ranking.update(evaluation, symbol=token_data.symbol or "")
 
         # ── Alert dispatch ─────────────────────────────────────────────────
         if self._alert_engine is not None and evaluation.eligible_for_alert:
@@ -502,7 +491,7 @@ class TokenScanner:
         """
         Fetch the most current market data for a token.
 
-        Tries DexScreener first; falls back to Pump.fun.
+        Tries DexScreener first; falls back to Helius (Pump.fun is disabled).
         """
         try:
             dex: DexScreenerProvider = self._providers.get("dexscreener")  # type: ignore[assignment]
@@ -512,15 +501,17 @@ class TokenScanner:
         except Exception as exc:
             logger.debug("DexScreener fetch failed for %s: %s", mint[:12], exc)
 
+        # Fallback: Helius can supply basic token metadata when DexScreener
+        # has no pair data yet (e.g. very new or low-volume tokens).
         try:
-            pf = self._providers.get("pumpfun")
-            from app.providers.pumpfun import PumpFunProvider
-            if isinstance(pf, PumpFunProvider):
-                data = await pf.get_token_data(mint)
+            from app.providers.helius import HeliusProvider
+            helius = self._providers.get("helius")
+            if isinstance(helius, HeliusProvider):
+                data = await helius.get_token_metadata(mint)
                 if data is not None:
                     return data
         except Exception as exc:
-            logger.debug("Pump.fun fallback fetch failed for %s: %s", mint[:12], exc)
+            logger.debug("Helius fallback fetch failed for %s: %s", mint[:12], exc)
 
         return None
 

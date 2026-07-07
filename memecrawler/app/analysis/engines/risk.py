@@ -63,7 +63,6 @@ def evaluate(
         The risk level and a ScoreResult (higher score = safer).
     """
     if rugcheck_data is None:
-        # No RugCheck data — conservative partial score
         result = ScoreResult(
             score=MAX_SCORE * 0.4,
             max_score=MAX_SCORE,
@@ -73,7 +72,6 @@ def evaluate(
         return RiskLevel.UNKNOWN, result
 
     score = MAX_SCORE
-    flags_triggered: list[str] = []
     details: dict[str, Any] = {"data_available": True}
 
     # ── RugCheck score ────────────────────────────────────────────────────
@@ -82,13 +80,17 @@ def evaluate(
 
     if rc_score is not None:
         if rc_score >= _RUGCHECK_SAFE_THRESHOLD:
-            pass   # Full score
+            pass
         elif rc_score >= _RUGCHECK_OK_THRESHOLD:
             score -= 3.0
         else:
             score -= 8.0
 
     # ── Risk flags ────────────────────────────────────────────────────────
+    # _extract_flags already includes mint/freeze authority from top-level fields.
+    # We do NOT add separate inline deductions for mint/freeze authority here —
+    # that was a double-counting bug (they were penalised via _CRITICAL_FLAGS AND
+    # via the inline check below, resulting in -11 instead of -6 for mint, etc.).
     raw_flags = _extract_flags(rugcheck_data)
     details["raw_flag_count"] = len(raw_flags)
 
@@ -100,10 +102,9 @@ def evaluate(
     score -= len(high_hits) * 3.0
     score -= len(medium_hits) * 1.0
 
-    flags_triggered = (
+    flags_triggered: list[str] = (
         list(critical_hits) + list(high_hits) + list(medium_hits)
     )
-    details["flags_triggered"] = flags_triggered
 
     # ── Holder concentration ──────────────────────────────────────────────
     top_holder_pct = _extract_top_holder_pct(rugcheck_data)
@@ -116,14 +117,6 @@ def evaluate(
             score -= 3.0
         elif top_holder_pct > 20:
             score -= 1.0
-
-    # ── Mint / Freeze authority checks ────────────────────────────────────
-    if rugcheck_data.get("mintAuthority"):
-        score -= 5.0
-        flags_triggered.append("mint_authority_active")
-    if rugcheck_data.get("freezeAuthority"):
-        score -= 4.0
-        flags_triggered.append("freeze_authority_active")
 
     score = max(0.0, min(MAX_SCORE, score))
     details["flags_triggered"] = list(set(flags_triggered))
@@ -159,10 +152,9 @@ def _extract_flags(data: dict[str, Any]) -> frozenset[str]:
     for risk in risks:
         name = risk.get("name") or risk.get("id") or ""
         if name:
-            # Normalise to snake_case
             flags.add(name.lower().replace(" ", "_").replace("-", "_"))
 
-    # Also check top-level boolean flags
+    # Top-level boolean authority flags (only added here — not in evaluate())
     if data.get("mintAuthority"):
         flags.add("mint_authority_enabled")
     if data.get("freezeAuthority"):
@@ -173,15 +165,15 @@ def _extract_flags(data: dict[str, Any]) -> frozenset[str]:
 
 def _extract_top_holder_pct(data: dict[str, Any]) -> Optional[float]:
     """Return the top-holder percentage if available."""
-    # RugCheck v1 report may contain topHolders list
     top_holders = data.get("topHolders") or []
     if not top_holders:
         return None
     try:
-        # Sum of pct for the top holder
         first = top_holders[0]
         pct = first.get("pct") or first.get("percentage") or 0
-        return float(pct) * (100 if float(pct) <= 1.0 else 1)   # normalise
+        val = float(pct)
+        # Normalise: RugCheck may return 0.45 (fraction) or 45.0 (percent)
+        return val * 100 if val <= 1.0 else val
     except (IndexError, TypeError, ValueError):
         return None
 
