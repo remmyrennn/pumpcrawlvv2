@@ -1,0 +1,1 @@
+"""MemeCrawler domain models."""
