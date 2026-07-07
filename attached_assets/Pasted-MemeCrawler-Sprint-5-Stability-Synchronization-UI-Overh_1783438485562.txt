@@ -1,0 +1,484 @@
+MemeCrawler — Sprint 5 (Stability, Synchronization & UI Overhaul)
+
+IMPORTANT
+
+This is NOT a new project.
+
+This is Sprint 5 of an existing production project called MemeCrawler.
+
+Read and understand the entire repository before making any changes.
+
+Do NOT start coding immediately.
+
+Your first task is to completely understand the architecture, dependencies, data flow, Telegram UI, scanner pipeline, providers, scheduler, cache, analysis engines, database layer and alert engine.
+
+⸻
+
+PRIMARY OBJECTIVE
+
+Sprint 5 is NOT a feature sprint.
+
+Sprint 5 is a stability, synchronization and production quality milestone.
+
+Every known issue must be fixed before implementing new functionality.
+
+The finished project must feel like one complete, polished system rather than several independent modules.
+
+⸻
+
+STRICT RULES
+
+These rules are mandatory.
+
+* Read every Python file before modifying anything.
+* Understand every dependency.
+* Preserve the current architecture.
+* Preserve the existing folder structure.
+* Preserve naming conventions.
+* Preserve the scanner pipeline.
+* Preserve database compatibility unless migration is absolutely required.
+* Do NOT remove existing working features.
+* Do NOT introduce placeholder implementations.
+* Do NOT leave TODO comments.
+* Do NOT partially implement features.
+* Do NOT create duplicated logic.
+* Remove obsolete code where appropriate.
+* Ensure every module stays synchronized with every other module.
+* Every interface between modules must remain consistent.
+* If one file changes, update every dependent file.
+* Fix bugs before adding new features.
+* Produce clean, maintainable, production-quality code.
+
+⸻
+
+FULL CODEBASE AUDIT
+
+Perform a complete audit of the repository.
+
+Review every Python file for:
+
+* runtime bugs
+* hidden bugs
+* race conditions
+* dead code
+* duplicate code
+* inconsistent logic
+* outdated interfaces
+* broken imports
+* memory leaks
+* performance bottlenecks
+* scheduler issues
+* database issues
+* async issues
+* provider failures
+* Telegram callback issues
+* API failures
+
+If a file requires refactoring for stability, rewrite that file while preserving compatibility with the remainder of the project.
+
+⸻
+
+FIX EVERY IDENTIFIED ISSUE
+
+Fix every issue discovered during the audit, including the issues already identified in the supplied review report.
+
+Do not stop after fixing only the listed issues.
+
+Search for additional problems and resolve them.
+
+⸻
+
+DISCOVERY ENGINE
+
+Pump.fun is no longer considered a reliable production provider.
+
+Refactor the discovery pipeline to use:
+
+* DexScreener
+* Helius
+
+Keep provider architecture modular so future providers can easily be added.
+
+Gracefully handle provider failures.
+
+No provider failure should stop the scanner.
+
+⸻
+
+HELIUS
+
+Use Helius as the primary Solana infrastructure provider.
+
+Use it wherever appropriate for:
+
+* RPC
+* wallet analysis
+* holder analysis
+* token metadata
+* transaction history
+* deployer analysis
+* ownership verification
+* smart wallet analysis where beneficial
+
+If any required Helius configuration is missing or invalid, ask me before proceeding.
+
+⸻
+
+DATABASE
+
+SQLite remains the primary local database.
+
+Whenever Supabase is available:
+
+Automatically synchronize SQLite changes to Supabase.
+
+If Supabase becomes unavailable:
+
+Continue operating entirely from SQLite.
+
+Queue synchronization automatically.
+
+Synchronize automatically once Supabase becomes available again.
+
+No user action should be required.
+
+⸻
+
+BROADCAST CHATS
+
+TARGET_CHAT_ID must no longer be stored as configuration.
+
+Broadcast chats must instead be stored in the database.
+
+Create a full management system.
+
+Allow:
+
+* Add broadcast chat
+* Remove broadcast chat
+* List broadcast chats
+* Enable/disable chats
+
+Changes should persist automatically.
+
+⸻
+
+CONTRACT ADDRESS TRACKING
+
+Whenever any user pastes a valid Solana contract address:
+
+Private chats:
+Automatically begin tracking.
+
+Groups:
+Automatically detect the contract address and begin tracking if permitted.
+
+Track both:
+
+* upward movement
+* downward movement
+
+Generate milestone alerts.
+
+Milestones should trigger on meaningful percentage movements (including both gains and losses) while avoiding duplicate notifications for the same movement range.
+
+Continue monitoring until tracking ends.
+
+⸻
+
+TOKEN TIMELINE
+
+Every tracked token should maintain its own timeline.
+
+Example:
+
+Added
+
++15%
+
++25%
+
+Risk changed
+
+Confidence increased
+
+New ATH
+
+-15%
+
+Recovered
+
+Every important event should be stored.
+
+Timeline should be viewable from Telegram.
+
+⸻
+
+TELEGRAM UI
+
+Completely redesign the Telegram interface.
+
+Use INLINE BUTTONS ONLY.
+
+Never use the Telegram reply keyboard.
+
+No floating keyboard.
+
+Every screen edits itself where possible.
+
+The interface should feel like an application.
+
+Every submenu must include:
+
+⬅ Back
+
+No Home button.
+
+⸻
+
+UI SECTIONS
+
+Main Menu
+
+Dashboard
+
+Scanner
+
+Leaderboard
+
+Watchlist
+
+Track Token
+
+Broadcast Chats
+
+Filters
+
+Admin
+
+Heartbeat
+
+Logs
+
+About
+
+Every existing slash command must also exist as an inline button.
+
+No functionality should require typing commands manually.
+
+Slash commands should continue working exactly as before.
+
+⸻
+
+UI REQUIREMENTS
+
+Every screen must support:
+
+Back navigation
+
+Pagination where appropriate
+
+Refresh buttons where appropriate
+
+Confirmation dialogs for destructive actions
+
+Consistent formatting
+
+Consistent icons
+
+Consistent layouts
+
+Minimal message spam by editing existing messages whenever possible.
+
+⸻
+
+WATCHLIST
+
+Improve the watchlist.
+
+Support:
+
+Pinned tokens
+
+Search
+
+Filtering
+
+Sorting
+
+Status indicators
+
+Live refresh
+
+Timeline access
+
+Detailed token pages
+
+⸻
+
+LEADERBOARD
+
+Fix every leaderboard issue.
+
+Support proper sorting by:
+
+Conviction
+
+Confidence
+
+Improvement
+
+Display proper token symbols.
+
+Improve formatting.
+
+Optimize performance.
+
+⸻
+
+ALERT ENGINE
+
+Improve reliability.
+
+Prevent duplicate alerts.
+
+Prevent race conditions.
+
+Improve deduplication.
+
+Improve delivery.
+
+Improve logging.
+
+Ensure heartbeat functionality works correctly.
+
+Ensure Telegram delivery works correctly.
+
+⸻
+
+FILTERS
+
+Runtime filters must actually affect scanner behaviour immediately.
+
+No restart should be required.
+
+Ensure every editable filter is fully functional.
+
+⸻
+
+PERFORMANCE
+
+Reduce unnecessary database operations.
+
+Reduce duplicated calculations.
+
+Optimize ranking updates.
+
+Optimize scanner performance.
+
+Prevent overlapping scan cycles.
+
+Improve caching where beneficial.
+
+⸻
+
+TOKEN DETAILS
+
+Improve the token details screen.
+
+Display useful information including score, confidence, risk, market metrics, milestones, timeline, and reasoning behind the score.
+
+Use consistent formatting.
+
+⸻
+
+LOGGING
+
+Improve logging.
+
+Differentiate:
+
+INFO
+
+WARNING
+
+ERROR
+
+DEBUG
+
+Improve readability.
+
+⸻
+
+CONFIGURATION
+
+If any required configuration value is missing:
+
+Stop.
+
+Ask me.
+
+Never invent values.
+
+Never silently ignore missing configuration.
+
+This includes:
+
+Telegram Bot Token
+
+Authorized Users
+
+Broadcast Chats
+
+Supabase configuration
+
+Helius configuration
+
+Or any additional API or credential required for full functionality.
+
+If additional APIs or services would significantly improve MemeCrawler, recommend them and ask whether I want to integrate them before proceeding.
+
+⸻
+
+TESTING
+
+Before declaring Sprint 5 complete:
+
+Verify:
+
+Every command
+
+Every callback
+
+Every scheduler
+
+Every provider
+
+Every scanner cycle
+
+Every alert
+
+Every UI page
+
+Every database operation
+
+Every synchronization task
+
+Every API integration
+
+Every Render deployment requirement
+
+Every heartbeat
+
+Everything must work together.
+
+⸻
+
+FINAL REQUIREMENT
+
+Do not consider Sprint 5 complete until the entire codebase has been audited, synchronized, stabilized, fully integrated, tested, and verified to function as one cohesive production-ready system.
+
+Quality, reliability, maintainability and stability are more important than implementation speed.
+
+This sprint should leave MemeCrawler in a polished, production-ready state suitable for future feature development rather than further architectural repair.
+:::writing
