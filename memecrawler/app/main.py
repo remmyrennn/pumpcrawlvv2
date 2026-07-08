@@ -187,6 +187,32 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         application.state.scanner = _scanner
 
         # 10. Telegram (constructed before intelligence — alert engine needs it)
+
+        # Load persisted broadcast chats from DB and merge with settings defaults.
+        _persisted_chats: list[dict[str, str]] = []
+        try:
+            await _db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS broadcast_chats (
+                    chat_id TEXT PRIMARY KEY,
+                    name    TEXT NOT NULL DEFAULT '',
+                    added_at TEXT NOT NULL DEFAULT ''
+                );
+                """
+            )
+            rows = await _db.fetchall("SELECT chat_id, name FROM broadcast_chats;")
+            _persisted_chats = [{"id": r["chat_id"], "name": r["name"]} for r in rows]
+        except Exception as _exc:
+            logger.warning("Could not load persisted broadcast chats: %s", _exc)
+
+        # Merge: settings default first, then DB-persisted (DB wins on duplicate id)
+        _seen_ids: set[str] = set()
+        _merged_chats: list[dict[str, str]] = []
+        for _chat in settings.broadcast_chat_list + _persisted_chats:
+            if _chat["id"] not in _seen_ids:
+                _merged_chats.append(_chat)
+                _seen_ids.add(_chat["id"])
+
         _telegram_bot = None
         if settings.bot_configured:
             try:
@@ -194,7 +220,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                     token=settings.bot_token,
                     authorized_user_ids=settings.authorized_user_ids,
                     target_chat=settings.target_chat,
-                    broadcast_chats=settings.broadcast_chat_list,
+                    broadcast_chats=_merged_chats,
                 )
             except (TelegramNotConfiguredError, Exception) as exc:
                 logger.warning("TelegramBot construction failed: %s", exc)

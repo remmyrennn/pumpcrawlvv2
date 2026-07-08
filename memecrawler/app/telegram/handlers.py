@@ -73,6 +73,11 @@ def _main_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🔬 Diagnostics", callback_data="cmd:diagnostics"),
             InlineKeyboardButton("❓ Help",         callback_data="cmd:help"),
         ],
+        [
+            InlineKeyboardButton("➕ Add Chat",    callback_data="cmd:addchat"),
+            InlineKeyboardButton("➖ Remove Chat", callback_data="cmd:removechat"),
+            InlineKeyboardButton("📡 Chats",       callback_data="cmd:chats"),
+        ],
     ])
 
 
@@ -161,9 +166,11 @@ async def _cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/database     — SQLite stats\n"
         "/cache        — Cache statistics\n\n"
         "<b>Broadcast</b>\n"
-        "/chats              — List broadcast targets\n"
-        "/broadcast [text]   — Send heartbeat (or custom text) to ALL groups\n"
-        "/sendto &lt;name_or_id&gt; &lt;text&gt; — Send text to one specific group\n\n"
+        "/chats                        — List broadcast targets\n"
+        "/broadcast [text]             — Send heartbeat (or custom text) to ALL groups\n"
+        "/sendto &lt;name_or_id&gt; &lt;text&gt;   — Send to one specific group\n"
+        "/addchat &lt;id&gt; [name]          — Add a group to broadcast list (persisted)\n"
+        "/removechat &lt;id_or_name&gt;      — Remove a group from broadcast list\n\n"
         "<b>Configuration</b>\n"
         "/editfilters  — View/adjust runtime filters\n"
         "/menu         — Reopen this menu"
@@ -944,6 +951,139 @@ async def _cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.effective_message.reply_text(status)
 
 
+async def _cmd_addchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /addchat <id> [name]
+
+    Adds a chat to the broadcast list at runtime and persists it to the DB
+    so it survives restarts.
+    """
+    db: "DatabaseManager | None" = (
+        context.bot_data.get("db") if context.bot_data else None
+    )
+    broadcast_chats: list[dict[str, str]] = (
+        context.bot_data.get("broadcast_chats") or []
+        if context.bot_data else []
+    )
+
+    args = context.args or []
+    if not args:
+        await update.effective_message.reply_text(
+            "⚠️ Usage: /addchat &lt;chat_id&gt; [name]\n\n"
+            "Example: /addchat -1001234567890 Alpha Calls",
+            parse_mode="HTML",
+        )
+        return
+
+    chat_id = args[0].strip()
+    name = " ".join(args[1:]).strip() if len(args) > 1 else chat_id
+
+    # Check if already present
+    existing_ids = {c.get("id", "") for c in broadcast_chats}
+    if chat_id in existing_ids:
+        await update.effective_message.reply_text(
+            f"ℹ️ Chat <code>{chat_id}</code> is already in the broadcast list.",
+            parse_mode="HTML",
+        )
+        return
+
+    # Add to live in-memory list
+    new_entry: dict[str, str] = {"id": chat_id, "name": name}
+    broadcast_chats.append(new_entry)
+    context.bot_data["broadcast_chats"] = broadcast_chats
+
+    # Persist to SQLite
+    if db:
+        try:
+            from app.utils.time_utils import utcnow_iso as _now
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS broadcast_chats (
+                    chat_id  TEXT PRIMARY KEY,
+                    name     TEXT NOT NULL DEFAULT '',
+                    added_at TEXT NOT NULL DEFAULT ''
+                );
+                """,
+            )
+            await db.execute(
+                "INSERT OR REPLACE INTO broadcast_chats (chat_id, name, added_at) VALUES (?,?,?);",
+                (chat_id, name, _now()),
+            )
+        except Exception as exc:
+            logger.error("_cmd_addchat: DB persist failed: %s", exc)
+            await update.effective_message.reply_text(
+                f"⚠️ Added to session but DB persist failed: {exc}"
+            )
+            return
+
+    await update.effective_message.reply_text(
+        f"✅ Added <b>{name}</b> (<code>{chat_id}</code>) to broadcast list.\n"
+        f"Total chats: {len(broadcast_chats)}",
+        parse_mode="HTML",
+    )
+
+
+async def _cmd_removechat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /removechat <id_or_name>
+
+    Removes a chat from the broadcast list and deletes it from the DB.
+    """
+    db: "DatabaseManager | None" = (
+        context.bot_data.get("db") if context.bot_data else None
+    )
+    broadcast_chats: list[dict[str, str]] = (
+        context.bot_data.get("broadcast_chats") or []
+        if context.bot_data else []
+    )
+
+    args = context.args or []
+    if not args:
+        await update.effective_message.reply_text(
+            "⚠️ Usage: /removechat &lt;chat_id_or_name&gt;\n\n"
+            "Use /chats to see current broadcast targets.",
+            parse_mode="HTML",
+        )
+        return
+
+    query = " ".join(args).strip().lower()
+
+    # Find matching entry
+    match: Optional[dict[str, str]] = None
+    for chat in broadcast_chats:
+        if chat.get("id", "").lower() == query or chat.get("name", "").lower() == query:
+            match = chat
+            break
+
+    if not match:
+        await update.effective_message.reply_text(
+            f"❌ No broadcast chat found matching <code>{query}</code>.\n"
+            "Use /chats to see all targets.",
+            parse_mode="HTML",
+        )
+        return
+
+    # Remove from live list
+    broadcast_chats[:] = [c for c in broadcast_chats if c.get("id") != match.get("id")]
+    context.bot_data["broadcast_chats"] = broadcast_chats
+
+    # Remove from DB
+    if db:
+        try:
+            await db.execute(
+                "DELETE FROM broadcast_chats WHERE chat_id = ?;",
+                (match.get("id", ""),),
+            )
+        except Exception as exc:
+            logger.error("_cmd_removechat: DB delete failed: %s", exc)
+
+    await update.effective_message.reply_text(
+        f"🗑 Removed <b>{match.get('name', match.get('id'))}</b> from broadcast list.\n"
+        f"Remaining chats: {len(broadcast_chats)}",
+        parse_mode="HTML",
+    )
+
+
 async def _cmd_sendto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     /sendto <name_or_id> <message>
@@ -1070,6 +1210,8 @@ def register(
         ("chats",        auth(_cmd_chats)),
         ("broadcast",    auth(_cmd_broadcast)),
         ("sendto",       auth(_cmd_sendto)),
+        ("addchat",      auth(_cmd_addchat)),
+        ("removechat",   auth(_cmd_removechat)),
     ]
 
     # Populate the callback dispatcher map
