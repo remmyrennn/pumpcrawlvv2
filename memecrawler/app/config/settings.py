@@ -44,12 +44,10 @@ class Settings(BaseSettings):
     )
 
     # ── APIs ─────────────────────────────────────────────────────────────
-    # ↓↓↓ PASTE YOUR HELIUS API KEY HERE ↓↓↓
     helius_api_key: str = Field(
-        default="",
+        default="440a15f3-1acb-4ae0-885c-1b86e87a5f1f",
         description="Helius API key — get one free at https://dev.helius.xyz",
     )
-    # ↑↑↑ HELIUS_API_KEY ↑↑↑
 
     # ── Supabase ─────────────────────────────────────────────────────────
     supabase_url: str = Field(
