@@ -121,6 +121,10 @@ class Heartbeat:
 
     # ── Status message ────────────────────────────────────────────────────
 
+    async def build_message(self) -> str:
+        """Public wrapper — lets handlers build the heartbeat text without sending it."""
+        return await self._build_status_message()
+
     async def _build_status_message(self) -> str:
         """Build the full Telegram heartbeat status message."""
         uptime_sec = time.time() - self._start_time

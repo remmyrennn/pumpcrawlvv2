@@ -147,13 +147,14 @@ class TelegramBot:
             cache=self._cache,
             start_time=self._start_time,
             broadcast_chats=self._broadcast_chats,
+            target_chat=self._target_chat,
         )
 
         await self._app.initialize()
         await self._app.start()
         await self._app.updater.start_polling(
             drop_pending_updates=True,
-            allowed_updates=["message"],
+            allowed_updates=["message", "callback_query"],
         )
 
         logger.info("Telegram bot started (polling).")

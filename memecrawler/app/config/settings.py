@@ -104,7 +104,7 @@ class Settings(BaseSettings):
         description="Comma-separated list of developer wallet addresses to always reject.",
     )
     broadcast_chats: str = Field(
-        default="",
+        default="5534284317:Broadcast",
         description=(
             "Extra chat IDs to broadcast alerts and heartbeats to, with optional names. "
             "Format: 'chat_id:Name,chat_id:Name' e.g. '-100123:Alpha,-100456:Beta Calls'"
