@@ -232,14 +232,14 @@ class AlertEngine:
             return None
 
     async def _send(self, message: str) -> None:
-        """Send message via Telegram.  Logs if bot is unavailable."""
+        """Broadcast alert to all configured Telegram chats."""
         if self._bot is None or not self._bot.is_running:
             logger.info("Alert (no bot): %s", message[:120])
             return
         try:
-            await self._bot.send_message(message)
+            await self._bot.broadcast_message(message)
         except Exception as exc:
-            logger.error("Failed to send alert via Telegram: %s", exc)
+            logger.error("Failed to broadcast alert via Telegram: %s", exc)
 
     # ── Diagnostics ───────────────────────────────────────────────────────
 

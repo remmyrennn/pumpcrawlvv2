@@ -113,7 +113,7 @@ class Heartbeat:
 
         if self._bot is not None and self._bot.is_running:
             try:
-                await self._bot.send_message(message)
+                await self._bot.broadcast_message(message)
             except Exception as exc:
                 logger.error("Heartbeat Telegram send failed: %s", exc)
         else:

@@ -284,7 +284,7 @@ async def _cmd_watch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     try:
-        entries = await watchlist.all_active()
+        entries = await watchlist.get_all()
     except Exception as exc:
         logger.error("_cmd_watch: failed to fetch watchlist: %s", exc)
         await update.effective_message.reply_text("❌ Failed to fetch watchlist data.")
@@ -355,7 +355,7 @@ async def _cmd_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     try:
-        entries = await watchlist.all_active()
+        entries = await watchlist.get_all()
     except Exception as exc:
         logger.error("_cmd_watchlist: error: %s", exc)
         await update.effective_message.reply_text("❌ Failed to fetch watchlist data.")
@@ -497,10 +497,10 @@ async def _cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             else:
                 rows = await ranking_engine.get_top(n=10, rank_type=sort_key)
         else:
-            if sort_key == "confidence":
-                order_clause = "confidence DESC, score DESC"
-            else:
-                order_clause = "score DESC, confidence DESC"
+            order_clause = (
+                "confidence DESC, score DESC" if sort_key == "confidence"
+                else "score DESC, confidence DESC"
+            )
             raw = await db.fetchall(
                 f"SELECT * FROM rankings ORDER BY {order_clause} LIMIT 10;"
             )
@@ -518,19 +518,64 @@ async def _cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return
 
+    # Enrich each row with watchlist + outcome detail from DB
+    mints = [r.get("mint", "") for r in rows if r.get("mint")]
+    detail: dict[str, dict] = {}
+    if mints:
+        try:
+            placeholders = ",".join("?" * len(mints))
+            wl_rows = await db.fetchall(
+                f"""
+                SELECT w.mint, w.symbol, w.first_seen_at, w.market_cap_usd,
+                       w.risk_level, w.state,
+                       o.peak_gain_pct, o.current_gain_pct, o.outcome
+                FROM   watchlist w
+                LEFT JOIN outcomes o ON o.mint = w.mint
+                WHERE  w.mint IN ({placeholders})
+                """,
+                tuple(mints),
+            )
+            for r in wl_rows:
+                detail[r["mint"]] = dict(r)
+        except Exception:
+            pass
+
     lines = [f"🏆 <b>Leaderboard — Top {len(rows)} by {sort_label}</b>\n"]
+
     for i, row in enumerate(rows, start=1):
-        sym = row.get("symbol") or "?"
+        mint  = row.get("mint", "")
+        sym   = row.get("symbol") or detail.get(mint, {}).get("symbol") or "?"
         score = float(row.get("latest_score") or row.get("score") or 0)
-        conf = float(row.get("confidence") or 0)
-        risk = row.get("risk_level") or "UNKNOWN"
+        conf  = float(row.get("confidence") or 0)
+        risk  = row.get("risk_level") or detail.get(mint, {}).get("risk_level") or "UNKNOWN"
         risk_icon = {"LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🟠", "CRITICAL": "🔴"}.get(risk, "⚪")
-        extra = ""
+
+        d = detail.get(mint, {})
+        mc_raw   = d.get("market_cap_usd")
+        mc_str   = _fmt_usd(mc_raw) if mc_raw else "—"
+        first_raw = str(d.get("first_seen_at") or "")[:10]
+        first_str = first_raw or "—"
+
+        peak_raw = d.get("peak_gain_pct")
+        peak_str = f"{peak_raw:+.1f}%" if peak_raw is not None else "—"
+        curr_raw = d.get("current_gain_pct")
+        curr_str = f"{curr_raw:+.1f}%" if curr_raw is not None else "—"
+        outcome  = d.get("outcome") or ""
+
+        imp_str = ""
         if sort_key == "improvement":
             imp = float(row.get("improvement") or 0)
-            extra = f"  Δ{imp:+.0f}"
+            imp_str = f"  Δ{imp:+.0f}"
+
+        state = d.get("state") or ""
+        state_tag = f" [{state}]" if state else ""
+
         lines.append(
-            f"#{i} {risk_icon} <b>{sym}</b>  Score:{score:.0f}  Conf:{conf:.0f}%{extra}"
+            f"\n#{i} {risk_icon} <b>{sym}</b>{state_tag}{imp_str}\n"
+            f"  Score: {score:.0f}  Conf: {conf:.0f}%  Risk: {risk}\n"
+            f"  MC: {mc_str}  First seen: {first_str}\n"
+            f"  Peak: {peak_str}  Now: {curr_str}"
+            + (f"  ({outcome})" if outcome else "")
         )
 
     await update.effective_message.reply_text("\n".join(lines), parse_mode="HTML")
