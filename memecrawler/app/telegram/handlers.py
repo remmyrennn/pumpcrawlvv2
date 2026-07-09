@@ -78,6 +78,9 @@ def _main_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton("➖ Remove Chat", callback_data="cmd:removechat"),
             InlineKeyboardButton("📡 Chats",       callback_data="cmd:chats"),
         ],
+        [
+            InlineKeyboardButton("💾 Export DB",   callback_data="cmd:exportdb"),
+        ],
     ])
 
 
@@ -171,6 +174,8 @@ async def _cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/sendto &lt;name_or_id&gt; &lt;text&gt;   — Send to one specific group\n"
         "/addchat &lt;id&gt; [name]          — Add a group to broadcast list (persisted)\n"
         "/removechat &lt;id_or_name&gt;      — Remove a group from broadcast list\n\n"
+        "<b>Data</b>\n"
+        "/exportdb     — Send database file to this chat\n\n"
         "<b>Configuration</b>\n"
         "/editfilters  — View/adjust runtime filters\n"
         "/menu         — Reopen this menu"
@@ -572,6 +577,7 @@ async def _cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         lines.append(
             f"\n#{i} {risk_icon} <b>{sym}</b>{state_tag}{imp_str}\n"
+            f"  CA: <code>{mint}</code>\n"
             f"  Score: {score:.0f}  Conf: {conf:.0f}%  Risk: {risk}\n"
             f"  MC: {mc_str}  First seen: {first_str}\n"
             f"  Peak: {peak_str}  Now: {curr_str}"
@@ -1068,6 +1074,53 @@ async def _cmd_addchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
+async def _cmd_exportdb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /exportdb — Send the SQLite database file directly in this chat.
+
+    Sends the live .db file as a Telegram document so you can download it
+    for offline analysis, backup, or import into another tool.
+    """
+    import os
+    from telegram import InputFile
+
+    db: "DatabaseManager | None" = (
+        context.bot_data.get("db") if context.bot_data else None
+    )
+    db_path = db.path if db else "memecrawler.db"
+
+    if not os.path.exists(db_path):
+        await update.effective_message.reply_text(
+            f"❌ Database file not found at <code>{db_path}</code>.", parse_mode="HTML"
+        )
+        return
+
+    size_bytes = os.path.getsize(db_path)
+    size_str = (
+        f"{size_bytes / 1_048_576:.1f} MB" if size_bytes >= 1_048_576
+        else f"{size_bytes / 1024:.0f} KB"
+    )
+
+    await update.effective_message.reply_text(
+        f"📤 Exporting database ({size_str})…"
+    )
+
+    try:
+        with open(db_path, "rb") as f:
+            await context.bot.send_document(
+                chat_id=update.effective_chat.id,
+                document=InputFile(f, filename="memecrawler.db"),
+                caption=(
+                    f"💾 <b>MemeCrawler DB Export</b>\n"
+                    f"Size: {size_str} · {utcnow_iso()[:19]} UTC"
+                ),
+                parse_mode="HTML",
+            )
+    except Exception as exc:
+        logger.error("_cmd_exportdb failed: %s", exc)
+        await update.effective_message.reply_text(f"❌ Export failed: {exc}")
+
+
 async def _cmd_removechat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     /removechat <id_or_name>
@@ -1257,6 +1310,7 @@ def register(
         ("sendto",       auth(_cmd_sendto)),
         ("addchat",      auth(_cmd_addchat)),
         ("removechat",   auth(_cmd_removechat)),
+        ("exportdb",     auth(_cmd_exportdb)),
     ]
 
     # Populate the callback dispatcher map
